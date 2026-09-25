@@ -1,0 +1,49 @@
+# DataAgent 生产 values —— 面向"国内外多地区/多行业、100万并发"的容量/HA 配置
+# 与 docs/06 审计 §2(Granian 参数) §4(容量推演) §5(GO 门槛) 对齐
+
+replicaCount: 20            # API 无状态 pod（HPA 驱动，最小 10 / 最大 200）
+api:
+  autoscaling:
+    enabled: true
+    minReplicas: 10
+    maxReplicas: 200
+    targetCPU: 60
+    targetMemory: 70
+  granian:
+    workers: 2              # CPU核数(每pod)；纯CPU可×2
+    threads: 8              # 建议 4-8
+    loop: rloop             # Granian 推荐高性能事件循环
+    http2: true
+    backpressure: 10000     # Granian 内建并发限制器：防雪崩
+    respawn: true
+    lifetime: 3600          # worker 定期重生，缓解内存碎片
+  resources:
+    requests: {cpu: "1", memory: 1Gi}
+    limits: {cpu: "2", memory: 2Gi}
+
+worker:
+  enabled: true
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 50        # 按 Pulsar 队列深度伸缩（KEDA 建议对接队列）
+  concurrency: 32          # 每 worker 有界并发信号量
+  resources:
+    requests: {cpu: "1", memory: 1Gi}
+    limits: {cpu: "2", memory: 2Gi}
+
+# Pulsar 生产化（对齐审计 §3-4）
+pulsar:
+  batching: true
+  batchingMaxPublishDelayMs: 10
+  batchingMaxMessages: 1000
+  subscription: key_shared   # 订单等保序用 Key_Shared；并行分析用 Shared
+  maxRedelivery: 5           # DLQ 兜底
+  deadLetterTopic: persistent://dataagent/prod/dataagent-jobs-dlq
+
+autoscaling:
+  enabled: true
+
+# 多区/多地区
+nodeSelector: {}
+tolerations: []

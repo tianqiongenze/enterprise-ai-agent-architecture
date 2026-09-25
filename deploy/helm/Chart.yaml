@@ -1,0 +1,15 @@
+# DataAgent 服务与基础设施 Helm Chart（可部署于 10.167.2.175/176 K8S）
+
+apiVersion: v2
+name: dataagent
+description: 企业级多租户零售经营分析与决策 DataAgent
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+
+# 依赖：仅声明需对接的外部基础设施（CRDB/Pulsar/Redis/Nebula/Milvus 均在 infra 命名空间，非本 chart 创建）
+dependencies: []
+
+# 覆盖值入口（values 见 values-prod.yaml）
+# 部署：
+#   helm upgrade --install dataagent deploy/helm -f deploy/helm/values-prod.yaml --namespace dataagent

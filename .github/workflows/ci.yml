@@ -1,0 +1,32 @@
+name: CI — DataAgent 连续回归门禁 (Regression Gate)
+
+on:
+  push:
+    paths: ["dataagent/**"]
+  pull_request:
+    paths: ["dataagent/**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        working-directory: dataagent
+        run: |
+          pip install -r requirements.txt pytest
+
+      - name: 运行测试套件（含故障注入 / Eval / Regression Gate）
+        working-directory: dataagent
+        run: |
+          PYTHONPATH=src python -m pytest -v
+
+      - name: 运行端到端演示（CLI 冒烟）
+        working-directory: dataagent
+        run: |
+          PYTHONPATH=src python -m dataagent "华东区本月 GMV 下滑原因诊断"

@@ -1,0 +1,19 @@
+[project]
+name = "dataagent-services"
+version = "0.2.0"
+description = "DataAgent 企业级服务层：Litestar + Granian 全异步 API 与 Pulsar Worker"
+requires-python = ">=3.11"
+
+# 基础设施驱动为可选：本地离线用内存实现，生产按需安装（见 REQUIREMENTS.services）
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio", "httpx", "httptools"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dataagent-worker
+  namespace: dataagent
+  labels: {app: dataagent, tier: worker}
+spec:
+  replicas: 5
+  selector: {matchLabels: {app: dataagent-worker}}
+  template:
+    metadata:
+      labels: {app: dataagent-worker}
+    spec:
+      containers:
+        - name: worker
+          image: dataagent/worker:0.2.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "services.worker.main"]
+          envFrom:
+            - configMapRef: {name: dataagent-config}
+            - secretRef: {name: dataagent-secrets}
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "2", memory: 2Gi}
+---
+# KEDA: 按 Pulsar 队列深度伸缩 Worker（需部署 KEDA；若未装此项可注释）
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata:
+#   name: dataagent-worker-scaled
+#   namespace: dataagent
+# spec:
+#   scaleTargetRef: {name: dataagent-worker}
+#   minReplicaCount: 5
+#   maxReplicaCount: 50
+#   triggers:
+#     - type: pulsar
+#       metadata:
+#         topic: persistent://dataagent/prod/dataagent-jobs
+#         activationLagThreshold: "10"

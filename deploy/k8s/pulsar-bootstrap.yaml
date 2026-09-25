@@ -1,0 +1,37 @@
+# Pulsar :: dataagent
+# 由部署流水线在首次启动前执行；幂等。
+# 说明：集群 10.167.2.175/176 的 Pulsar Broker(无认证) 已通过 Admin REST 就绪。
+# - NodePort 6650:32160  (Pulsar 协议端口)
+# - NodePort 8080:32679  (Admin/HTTP 端口)
+# - 已创建 tenant: dataagent / namespace: dataagent/prod / topic: persistent://dataagent/prod/dataagent-jobs
+# 本文件为可重复执行的 ClusterSetup Job 清单（也适用于 CI/配置中心动作）。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataagent-bootstrap-init
+  namespace: infra
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: init
+          image: curlimages/curl:8.6.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              ADMIN=http://pulsar:8080/admin
+              CLUSTER=cluster-175
+              echo "== ensure tenant dataagent =="
+              curl -sf -X PUT "$ADMIN/v2/tenants/dataagent" \
+                -H 'Content-Type: application/json' \
+                -d "{\"allowedClusters\":[\"$CLUSTER\"],\"adminRoles\":[]}" || echo "tenant exists/skipped"
+              echo "== ensure namespace dataagent/prod =="
+              curl -sf -X PUT "$ADMIN/v2/namespaces/dataagent/prod" \
+                -H 'Content-Type: application/json' -d '{}' || echo "ns exists/skipped"
+              echo "== ensure topic dataagent-jobs =="
+              curl -sf -X PUT "$ADMIN/v2/persistent/dataagent/prod/dataagent-jobs" || echo "topic exists/skipped"
+              echo "== ensure dlq topic =="
+              curl -sf -X PUT "$ADMIN/v2/persistent/dataagent/prod/dataagent-jobs-dlq" || echo "dlq exists/skipped"
+              echo "== done =="

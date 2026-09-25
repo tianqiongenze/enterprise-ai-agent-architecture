@@ -1,0 +1,12 @@
+# DataAgent —— 异步任务队列配置（Pulsar / 多 Worker）
+# 用于 stress/worker 场景。
+port: 8001
+workers: 4
+queue:
+  backend: pulsar        # pulsar | inmemory(local)
+  url: ${CONFIG_DATAAGENT_PULSAR_URL}
+  topic: persistent://dataagent/prod/dataagent-jobs
+  subscription: dataagent-workers
+  concurrency: 32
+  max_redelivery: 3
+  dead_letter_topic: persistent://dataagent/prod/dataagent-jobs-dlq

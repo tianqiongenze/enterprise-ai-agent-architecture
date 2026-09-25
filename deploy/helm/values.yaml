@@ -1,0 +1,45 @@
+# DataAgent Helm 默认 values（本地/演示）
+# 覆盖说明见 values-prod.yaml
+
+image:
+  repository: dataagent/api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Litestar+Granian API 副本（生产按 HPA 无状态弹性，见 values-prod）
+api:
+  replicas: 1
+  granian:
+    workers: 1
+    threads: 4
+    loop: auto
+    http2: true
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+worker:
+  enabled: true
+  replicas: 1
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+configMap:
+  RUN_ENV: prod
+  DATAAGENT_USE_PULSAR: "true"
+
+# 基础设施端点（对接 infra 命名空间既有中间件；凭据经 secrets）
+infra:
+  pulsarUrl: pulsar://pulsar.infra.svc.cluster.local:6650
+  crdbUrl: postgresql://root@cockroachdb.infra.svc.cluster.local:26257/dataagent?sslmode=disable
+  redisUrl: redis://:$(DATAAGENT_REDIS_PASSWORD)@redis.infra.svc.cluster.local:6379/0
+  milvusUri: http://milvus.infra.svc.cluster.local:19530
+  nebulaAddr: nebula-graphd.infra.svc.cluster.local:9669
+
+autoscaling:
+  enabled: false

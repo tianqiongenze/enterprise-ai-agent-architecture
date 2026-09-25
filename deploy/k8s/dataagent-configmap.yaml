@@ -1,0 +1,30 @@
+# DataAgent 配置与密钥示例（K8S）
+# 生产真值以外置 Secret/Vault 注入；此处为本地/演示默认，明示键名。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dataagent-config
+  namespace: dataagent
+data:
+  RUN_ENV: prod
+  DATAAGENT_USE_PULSAR: "true"
+  DATAAGENT_MODEL_DEFAULT: luna
+  DATAAGENT_MAX_ATTEMPTS: "3"
+  DATAAGENT_PULSAR_TOPIC: persistent://dataagent/prod/dataagent-jobs
+  DATAAGENT_PULSAR_DLQ: persistent://dataagent/prod/dataagent-jobs-dlq
+  DATAAGENT_PULSAR_SUBSCRIPTION: dataagent-workers
+  DATAAGENT_MILVUS_URI: http://milvus.infra.svc.cluster.local:19530
+  DATAAGENT_NEBULA_ADDR: nebula-graphd.infra.svc.cluster.local:9669
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dataagent-secrets
+  namespace: dataagent
+type: Opaque
+stringData:
+  # 生产用外部 Secret Manager / Vault；此处仅演示键名
+  DATAAGENT_DATABASE_URL: postgresql://root@cockroachdb.infra.svc.cluster.local:26257/dataagent?sslmode=verify-full
+  DATAAGENT_REDIS_URL: redis://:changeme@redis.infra.svc.cluster.local:6379/0
+  DATAAGENT_PULSAR_URL: pulsar://pulsar-broker.infra.svc.cluster.local:6650
+  DATAAGENT_NEBULA_PASSWORD: changeme

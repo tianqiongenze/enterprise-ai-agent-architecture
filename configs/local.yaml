@@ -1,0 +1,10 @@
+# 本地离线/单测配置（内存实现，不依赖外部）
+RUN_ENV: local
+SERVER_RUNTIME: granian
+
+DATAAGENT_USE_PULSAR: "false"   # 本地回退到单进程内存队列（测试/演示）
+DATAAGENT_MODEL_DEFAULT: luna
+DATAAGENT_MAX_ATTEMPTS: 3
+DATAAGENT_MEMORY_ENGINE: inmemory
+DATAAGENT_DATABASE_ENGINE: inmemory
+DATAAGENT_CACHE_ENGINE: inmemory

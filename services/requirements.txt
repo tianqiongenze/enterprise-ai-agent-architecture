@@ -1,0 +1,17 @@
+# 服务层基础依赖（本地离线即可跑测试/演示）
+litestar>=2.11
+granian>=1.5
+pydantic>=2.0
+pydantic-settings>=2.0
+graphql-core>=3.1
+strawberry-graphql>=0.227
+prometheus-client>=0.20
+asyncpg>=0.29
+starlette>=0.37
+
+# 生产接入真实中间件时额外安装（InfraProvider 会自动启用真实驱动的路径）
+# asyncpg>=0.29
+# redis>=5.0
+# pulsar-client>=3.4
+# nebula3>=3.8
+# pymilvus>=2.4

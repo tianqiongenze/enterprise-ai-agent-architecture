@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dataagent"
+version = "0.1.0"
+description = "企业级多租户零售经营分析与决策 DataAgent ——《企业级 Agent 工程架构实战营》贯穿项目"
+requires-python = ">=3.10"
+
+[project.scripts]
+dataagent-demo = "dataagent.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
