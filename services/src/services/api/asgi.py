@@ -164,12 +164,21 @@ def _run_sync(app_state: AppState, data: AnalysisRequest) -> dict:
     # 配置了 CRDB 时同步落库 → 使 GET /v1/tasks/{run_id} 与 GraphQL task(runId) 人工可查
     dsn = os.getenv("DATAAGENT_DATABASE_URL")
     if dsn:
-        try:
+        from dataagent.infra.persistence import cockroach as cr
+        payload = {"task_id": run.run_id, "status": run.status.value, "steps": len(run.steps),
+                   "events": len(run.events), "tenant_id": run.tenant_id, "query": run.query}
+        for attempt in range(2):  # 闸门瞬时饱和时退避重试一次
+            try:
+                import asyncio as _aio
+                _aio.run(cr.CockroachRunStore(dsn).save(run))
+                _aio.run(cr.mirror_run_to_redis(run.run_id, payload))
+                break
+            except Exception:  # noqa: BLE001
+                import time as _t; _t.sleep(1.5 * (attempt + 1))
+        # CRDB 仍失败时至少写 Redis 镜像，保证 /v1/tasks 人工可查
+        else:
             import asyncio as _aio
-            from dataagent.infra.persistence.cockroach import CockroachRunStore
-            _aio.run(CockroachRunStore(dsn).save(run))
-        except Exception:  # noqa: BLE001  落库失败不影响分析结果返回
-            pass
+            _aio.run(cr.mirror_run_to_redis(run.run_id, payload))
     return {
         "run_id": run.run_id,
         "status": run.status.value,
@@ -186,14 +195,17 @@ async def get_task(task_id: str, app_state: AppState) -> dict[str, object]:
     dsn = os.getenv("DATAAGENT_DATABASE_URL")
     if not dsn:
         raise HTTPException(status_code=404, detail="no datastore configured")
-    from dataagent.infra.persistence.cockroach import CockroachRunStore
-    rs = CockroachRunStore(dsn)
+    from dataagent.infra.persistence import cockroach as cr
     try:
+        rs = cr.CockroachRunStore(dsn)
         run = await rs.load(task_id)
-    except Exception:  # noqa: BLE001
+        return {"task_id": run.run_id, "status": run.status.value,
+                "steps": len(run.steps), "events": len(run.events)}
+    except Exception:  # noqa: BLE001  闸门饱和/未落库 → Redis 镜像
+        mirror = await cr.read_run_mirror(task_id)
+        if mirror:
+            return mirror
         raise HTTPException(status_code=404, detail="task not found")
-    return {"task_id": run.run_id, "status": run.status.value,
-            "steps": len(run.steps), "events": len(run.events)}
 
 
 @get("/metrics")

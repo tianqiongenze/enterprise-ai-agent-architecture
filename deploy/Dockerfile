@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 安装服务层与内核
 COPY services/ ./services/
 COPY dataagent/ ./dataagent/
+COPY scripts/ ./scripts/
 RUN pip install --no-cache-dir ./services ./dataagent
 
 EXPOSE 8000

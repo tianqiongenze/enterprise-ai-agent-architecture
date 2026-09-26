@@ -224,3 +224,153 @@ async def build_crdb_services():
     await rs._ensure()
     await ms._ensure()
     return rs, ms
+
+# ================= 许可闸门韧性层（第三轮新增） =================
+# 共享 CockroachDB 免费许可有"并发打开事务 ≤10"的集群级上限；被其他负载占满时
+# 任何查询（含 SELECT 1）都会被立即拒绝。以下机制把热路径对 CRDB 的同步依赖降到最低：
+#   1) regionMetrics 读预聚合汇总表（毫秒级短事务）+ Redis 镜像兜底
+#   2) Run 状态：CRDB 主写 + Redis 镜像；读取失败回退 Redis
+#   3) 所有连接带 statement_timeout 与 application_name，防自身慢查询占坑
+#   4) 引导/刷新脚本 scripts/refresh_region_summary.py 带"无限重试+退避"
+
+APP_NAME = "dataagent"
+LICENSE_GATE_HINT = "CRDB 免费许可并发事务上限已饱和（共享集群其他负载占用）"
+
+
+def _conn_kwargs(host: str, port: int, user: str, database: str, password: str,
+                 timeout_s: int) -> dict:
+    return dict(host=host, port=port, user=user, database=database, password=password,
+                timeout=timeout_s,
+                server_settings={"application_name": APP_NAME,
+                                 "statement_timeout": str(timeout_s * 1000)})
+
+
+def _dsn_kwargs(dsn: str, timeout_s: int) -> dict:
+    """从 postgresql://user@host:port/db?sslmode=... 解析；附加 server_settings。"""
+    from urllib.parse import urlparse, unquote
+    u = urlparse(dsn)
+    kw = dict(user=unquote(u.username or "root"), timeout=timeout_s,
+              server_settings={"application_name": APP_NAME,
+                               "statement_timeout": str(timeout_s * 1000)})
+    if u.password:
+        kw["password"] = unquote(u.password)
+    if u.port:
+        kw["port"] = u.port
+    db = (u.path or "/defaultdb").lstrip("/")
+    kw["database"] = db
+    # host 可能含多个逗号分隔值
+    kw["host"] = u.hostname or "localhost"
+    return kw
+
+
+async def _connect_kwargs_from_dsn(dsn: str, timeout_s: int = 8):
+    return await asyncpg.connect(**_dsn_kwargs(dsn, timeout_s))
+
+
+def _redis_fallback():
+    """返回 (client, enabled)；未配置或不可用时 (None, False)。"""
+    url = os.getenv("DATAAGENT_REDIS_FALLBACK", "")
+    if not url or _redis is None:
+        return None, False
+    try:
+        cli = _redis.from_url(url, decode_responses=True, socket_timeout=3)
+        return cli, True
+    except Exception:  # noqa: BLE001
+        return None, False
+
+
+RUN_MIRROR_TTL = 7 * 24 * 3600
+
+
+async def mirror_run_to_redis(run_id: str, payload: dict) -> bool:
+    cli, ok = _redis_fallback()
+    if not ok:
+        return False
+    try:
+        await cli.set(f"dataagent:run:{run_id}", json.dumps(payload, ensure_ascii=False),
+                      ex=RUN_MIRROR_TTL)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def read_run_mirror(run_id: str) -> Optional[dict]:
+    cli, ok = _redis_fallback()
+    if not ok:
+        return None
+    try:
+        raw = await cli.get(f"dataagent:run:{run_id}")
+        return json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+SUMMARY_TABLE = "orders_region_summary"
+
+
+async def ensure_summary_table(dsn: str) -> None:
+    conn = await _connect_kwargs_from_dsn(dsn, timeout_s=15)
+    try:
+        await conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {SUMMARY_TABLE}(
+            tenant_id STRING NOT NULL,
+            region STRING NOT NULL,
+            orders INT NOT NULL,
+            gmv FLOAT NOT NULL,
+            refreshed_at TIMESTAMPTZ DEFAULT now(),
+            PRIMARY KEY (tenant_id, region)
+        )
+        """)
+    finally:
+        await conn.close()
+
+
+async def refresh_region_summary(dsn: str) -> int:
+    """全量聚合 ≥1亿行 orders → 汇总表（重事务；由引导脚本在闸门开启时调用）。"""
+    conn = await _connect_kwargs_from_dsn(dsn, timeout_s=900)  # 15 分钟语句超时
+    try:
+        await conn.execute(f"DELETE FROM {SUMMARY_TABLE}")
+        n = await conn.fetchval(f"""
+        INSERT INTO {SUMMARY_TABLE}(tenant_id, region, orders, gmv, refreshed_at)
+        SELECT tenant_id, region, count(*)::INT, round(sum(amount)::numeric,2)::FLOAT, now()
+        FROM orders GROUP BY tenant_id, region
+        """)
+        cnt = await conn.fetchval(f"SELECT count(*) FROM {SUMMARY_TABLE}")
+        return int(cnt or 0)
+    finally:
+        await conn.close()
+
+
+async def read_region_summary(dsn: str, tenant_id: str, limit: int) -> Optional[list]:
+    """毫秒级读汇总表；闸门饱和抛异常由上层回退 Redis。"""
+    conn = await _connect_kwargs_from_dsn(dsn, timeout_s=6)
+    try:
+        rows = await conn.fetch(
+            f"SELECT region, orders, gmv FROM {SUMMARY_TABLE} WHERE tenant_id=$1 "
+            f"ORDER BY gmv DESC LIMIT $2", tenant_id, limit)
+        return [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def mirror_summary_to_redis(rows: list) -> bool:
+    cli, ok = _redis_fallback()
+    if not ok:
+        return False
+    try:
+        await cli.set("dataagent:region_summary", json.dumps(rows, ensure_ascii=False),
+                      ex=24 * 3600)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def read_summary_mirror() -> Optional[list]:
+    cli, ok = _redis_fallback()
+    if not ok:
+        return None
+    try:
+        raw = await cli.get("dataagent:region_summary")
+        return json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001
+        return None

@@ -1,0 +1,22 @@
+# regionMetrics 汇总表引导/刷新 Job（许可闸门韧性）
+# 首次部署后手动触发: kubectl delete job dataagent-summary-refresh -n dataagent-prod && kubectl apply -f 本文件
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataagent-summary-refresh
+  namespace: dataagent-prod
+spec:
+  backoffLimit: 60          # 闸门饱和时反复重试
+  activeDeadlineSeconds: 86400
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: refresh
+          image: 10.100.135.132:5000/dataagent/api:0.2.0
+          command: ["python", "/app/scripts/refresh_region_summary.py", "--once"]
+          env:
+            - name: DATAAGENT_DATABASE_URL
+              value: postgresql://root@cockroachdb.infra.svc.cluster.local:26257/dataagent
+            - name: DATAAGENT_REDIS_FALLBACK
+              value: redis://:difyai123456@redis.infra.svc.cluster.local:6379/2

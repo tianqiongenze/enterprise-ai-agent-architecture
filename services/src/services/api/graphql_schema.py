@@ -88,17 +88,51 @@ class Query:
         dsn = os.getenv("DATAAGENT_DATABASE_URL")
         if not dsn:
             return []
-        conn = await asyncpg.connect(dsn=dsn)
+        # 1) 优先读预聚合汇总表（毫秒级短事务，规避共享 CRDB 许可并发闸门）
+        # 2) CRDB 不可用（闸门饱和/超时）→ Redis 镜像兜底
+        # 3) 两者皆无 → 后台调度一次刷新，返回友好错误
+        import asyncio as _aio
+        from dataagent.infra.persistence import cockroach as cr
+        sem = _region_semaphore()
         try:
-            rows = await conn.fetch("""
-                SELECT region, count(*)::int AS orders,
-                       round(sum(amount)::numeric,2)::float AS gmv
-                FROM orders WHERE tenant_id=$1
-                GROUP BY region ORDER BY gmv DESC LIMIT $2
-            """, tenant_id, limit)
-        finally:
-            await conn.close()
+            async with sem:
+                rows = await _aio.wait_for(cr.read_region_summary(dsn, tenant_id, limit), timeout=8)
+        except Exception:
+            rows = await cr.read_summary_mirror()
+        if rows is None:
+            _aio.get_running_loop().create_task(_refresh_summary_bg(dsn))
+            raise Exception("经营聚合暂不可用：共享 CockroachDB 免费许可的并发事务上限已被其他负载占满，"
+                            "已触发后台刷新（汇总表/Redis 镜像就绪后自动恢复），请几分钟后重试。")
+        if rows:
+            _aio.get_running_loop().create_task(cr.mirror_summary_to_redis(rows))
         return [MetricAggregate(region=r["region"], orders=r["orders"], gmv=r["gmv"]) for r in rows]
+
+
+_SEM = None
+
+
+def _region_semaphore():
+    """每进程最多 1 个重查询并发（闸门友好）。"""
+    global _SEM
+    if _SEM is None:
+        _SEM = asyncio.Semaphore(1)
+    return _SEM
+
+
+async def _refresh_summary_bg(dsn: str):
+    """后台尽力刷新汇总表（失败静默，由引导 Job 重试）。"""
+    from dataagent.infra.persistence import cockroach as cr
+    try:
+        rows = await cr.read_region_summary(dsn, tenant_id="ten_1", limit=1)  # 探针：可读说明已建表
+        if rows is not None:
+            return  # 表已就绪
+    except Exception:
+        pass
+    try:
+        await cr.ensure_summary_table(dsn)
+        await cr.refresh_region_summary(dsn)
+    except Exception:  # noqa: BLE001  闸门饱和/超时——交由后台 Job 重试
+        pass
 
 
 @strawberry.type
