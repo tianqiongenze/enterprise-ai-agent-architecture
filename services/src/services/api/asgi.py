@@ -22,7 +22,7 @@ from typing import Any, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "dataagent", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
-from litestar import Litestar, get, post
+from litestar import Litestar, Response, get, post
 from litestar.di import Provide
 
 from litestar.handlers import get as _get, post as _post
@@ -161,6 +161,15 @@ def _run_sync(app_state: AppState, data: AnalysisRequest) -> dict:
     from dataagent.contracts.runtime import Run
     c = app_state.container()
     run: Run = c.analyze(data.query, data.tenant_id)
+    # 配置了 CRDB 时同步落库 → 使 GET /v1/tasks/{run_id} 与 GraphQL task(runId) 人工可查
+    dsn = os.getenv("DATAAGENT_DATABASE_URL")
+    if dsn:
+        try:
+            import asyncio as _aio
+            from dataagent.infra.persistence.cockroach import CockroachRunStore
+            _aio.run(CockroachRunStore(dsn).save(run))
+        except Exception:  # noqa: BLE001  落库失败不影响分析结果返回
+            pass
     return {
         "run_id": run.run_id,
         "status": run.status.value,
@@ -235,6 +244,94 @@ def _with_graphql(routes):
     return routes
 
 
+CONSOLE_HTML = """<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataAgent 人工测试控制台</title>
+<style>
+:root{--p:#0e7490;--pd:#0a5568;--acc:#06b6d4;--bg:#f5f7fa;--ink:#1f2937;--mut:#6b7280;--ok:#059669;--err:#dc2626;--warn:#d97706}
+*{box-sizing:border-box;margin:0}
+body{font-family:"Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--ink);padding:18px}
+header{background:var(--p);color:#fff;padding:14px 18px;border-radius:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+header h1{font-size:18px} header .u{font-size:12px;opacity:.9}
+main{max-width:1180px;margin:16px auto;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.card h2{font-size:14px;color:var(--pd);margin-bottom:10px;border-left:4px solid var(--acc);padding-left:8px}
+label{font-size:12px;color:var(--mut);display:block;margin:6px 0 3px}
+input,select,textarea{width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit}
+textarea{min-height:64px;resize:vertical}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}
+.row>*{flex:1;min-width:120px}
+button{background:var(--p);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer;margin-top:8px}
+button:hover{background:var(--pd)} button.ghost{background:#fff;color:var(--p);border:1px solid var(--p)}
+pre{background:#0f172a;color:#abb2bf;padding:10px;border-radius:8px;font-size:12px;max-height:260px;overflow:auto;white-space:pre-wrap;font-family:Consolas,monospace}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;margin-left:6px}
+.ok{background:#d1fae5;color:var(--ok)} .err{background:#fee2e2;color:var(--err)} .warn{background:#fef3c7;color:var(--warn)}
+.hint{font-size:12px;color:var(--mut);margin-top:8px;line-height:1.6}
+.full{grid-column:1/-1}
+</style></head><body>
+<header><h1>DataAgent 人工测试控制台</h1>
+<div class="u">Base: <input id="base" style="width:260px;padding:3px 6px;border:0;border-radius:4px" value="">
+<a href="/graphql" target="_blank" style="color:#a5f3fc;margin-left:10px">GraphiQL ↗</a>
+<a href="/metrics" target="_blank" style="color:#a5f3fc;margin-left:8px">Metrics ↗</a></div></header>
+<main>
+<div class="card"><h2>① 健康检查</h2>
+<div class="row"><button onclick="get('/healthz','o1')">GET /healthz</button>
+<button onclick="get('/readyz','o1')">GET /readyz</button></div>
+<pre id="o1">点击按钮检测存活/就绪</pre>
+<div class="hint">预期：healthz → <b>{"status":"alive"}</b>；readyz → <b>{"status":"ready"}</b>。任意节点 IP 皆可（175/176）。</div></div>
+
+<div class="card"><h2>② 提交经营分析</h2>
+<label>租户 tenant_id</label><select id="tenant"><option>ten_a</option><option>ten_b</option><option>ten_c</option></select>
+<label>用户 user_id</label><input id="user" value="u1">
+<label>分析问题 query</label><input id="q" value="华东区本月 GMV 下滑原因诊断">
+<label>幂等键 idempotency_key（重复提交应 409）</label>
+<div class="row"><input id="idem" placeholder="留空=不启用幂等"><button class="ghost" style="flex:0" onclick="idem.value='idem-'+Date.now()">生成</button></div>
+<div class="row"><button onclick="submit(false)">同步分析</button><button onclick="submit(true)">异步入队</button></div>
+<pre id="o2">同步=等结果（可复制 run_id）；异步=入队（内存队列演示模式）</pre>
+<div class="hint">预期：HTTP <b>201</b> + run.steps 含 plan/query/analyze/conclusion。相同幂等键再点 → <b>409 duplicate_request</b>。</div></div>
+
+<div class="card"><h2>③ 任务查询（用②返回的 run_id）</h2>
+<div class="row"><input id="rid" placeholder="run_xxxxxxxxxx"><button onclick="get('/v1/tasks/'+rid.value.trim(),'o3')">GET /v1/tasks/{run_id}</button></div>
+<pre id="o3">先在②同步执行一次，复制 run_id 到这里查询（结果已落 CockroachDB）</pre>
+<div class="hint">预期：200 + {"status":"succeeded","steps":7,...}；乱填 ID → <b>404</b>。</div></div>
+
+<div class="card"><h2>④ GraphQL（读写分离验证）</h2>
+<label>查询（Query=读 CRDB）</label>
+<textarea id="gq">{ regionMetrics(tenantId: "ten_1", limit: 3) { region orders gmv } }</textarea>
+<div class="row"><button onclick="gql()">执行 Query</button>
+<button class="ghost" onclick="gq.value='{ __typename }'">preset: typename</button>
+<button class="ghost" onclick="gq.value='mutation { submitAnalysis(query: \\"华东区 GMV 下滑\\", tenantId: \\"ten_a\\") { status } }'">preset: mutation</button></div>
+<pre id="o4">POST /graphql —— 从 ≥1 亿行 orders 表聚合</pre>
+<div class="hint">预期 regionMetrics 返回真实聚合（华东/华北…）。大表聚合首次可能 10s+，属正常。</div></div>
+
+<div class="card full"><h2>请求日志</h2><pre id="log" style="max-height:200px">（空）</pre></div>
+</main>
+<script>
+const B=document.getElementById('base');B.value=location.origin;
+function log(m){const L=document.getElementById('log');L.textContent=`[${new Date().toLocaleTimeString()}] ${m}\\n`+L.textContent}
+async function call(path, opt){const t0=performance.now();try{const r=await fetch(B.value+path,opt);const j=await r.text();const ms=(performance.now()-t0).toFixed(0);log(`${opt?.method||'GET'} ${path} → ${r.status} (${ms}ms)`);return {code:r.status,body:j,ms}}catch(e){log(`${path} → NET-ERR ${e}`);return {code:0,body:'网络错误：'+e,ms:0}}}
+function show(id,res){document.getElementById(id).textContent=`HTTP ${res.code} (${res.ms}ms)\\n`+(res.code===0?res.body:(()=>{try{return JSON.stringify(JSON.parse(res.body),null,2)}catch(e){return res.body}})());
+ const el=document.getElementById(id);el.classList.remove('ok','err','warn');el.classList.add(res.code>=200&&res.code<300?'ok':res.code===429||res.code===409?'warn':'err')}
+async function get(p,o){show(o,await call(p))}
+async function submit(a){const body={query:document.getElementById('q').value,tenant_id:document.getElementById('tenant').value,user_id:document.getElementById('user').value,async_:a};
+ const ik=document.getElementById('idem').value.trim();if(ik)body.idempotency_key=ik;
+ const res=await call('/v1/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});show('o2',res);
+ try{const j=JSON.parse(res.body);if(j.run&&j.run.run_id)document.getElementById('rid').value=j.run.run_id}catch(e){}}
+async function gql(){const res=await call('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:document.getElementById('gq').value})});show('o4',res)}
+</script></body></html>"""
+
+
+@get("/", media_type="text/html")
+async def console_root() -> Response:
+    return Response(content=CONSOLE_HTML, media_type="text/html")
+
+
+@get("/console", media_type="text/html")
+async def console_page() -> Response:
+    return Response(content=CONSOLE_HTML, media_type="text/html")
+
+
 def _with_graphql(routes):
     if _gql_handler is not None:
         return [*routes, _gql_handler]
@@ -242,7 +339,7 @@ def _with_graphql(routes):
 
 
 app = Litestar(
-    route_handlers=_with_graphql([healthz, readyz, create_analysis, get_task, metrics]),
+    route_handlers=_with_graphql([console_root, console_page, healthz, readyz, create_analysis, get_task, metrics]),
     dependencies={"app_state": Provide(get_state)},
     exception_handlers={500: _on_exc},
     openapi_config=None,
