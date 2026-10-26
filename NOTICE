@@ -1,0 +1,34 @@
+# Licensing in enterprise-ai-agent-architecture
+
+This repository carries two licenses, split by what the file *is*, and the boundary is
+written down because it is not self-evident once courseware and code sit in one tree.
+
+| Material | Covers | License | File |
+| --- | --- | --- | --- |
+| Code and executable material | everything not named below — source, scripts, configuration, build files | PolyForm Noncommercial License 1.0.0 | `LICENSE` |
+| Documentation and materials | `**/*.md`, `docs/**`, `slides/**`, `figures/**`, `*.pdf`, `*.pptx` | CC BY-NC-SA 4.0 | `LICENSE.docs` |
+| Third-party files | `vendor/**`, `node_modules/**`, plus any file they point at | its original license, unchanged | as shipped |
+
+## What this does not do
+
+- It does not relicense anyone else's work. Vendored assets, upstream sources and
+  material reproduced from other authors keep their own terms; where that matters,
+  `PROVENANCE.md` records who owns what.
+- It does not put this code in the public domain, and it is not an OSI-approved open
+  source license. `LICENSE` is PolyForm Noncommercial License 1.0.0, which is
+  source-available: free to read, study, teach from, and build non-commercial
+  projects on, but not free to sell. Calling it "open source" without that
+  qualification would misstate the terms.
+- A file's extension does not decide its license by itself. If a Markdown file is
+  really configuration, or a script is really courseware, say so in the file and
+  the stated terms win.
+
+## Asking for more
+
+The non-commercial restriction is a deliberate choice, not an oversight: this work is
+meant to be reusable by students, teachers, researchers and hobby projects without
+being picked up and resold unchanged. If a commercial use genuinely needs different
+terms, open an issue and ask — separate arrangements are possible on a case by case
+basis.
+
+Copyright (c) 2026 Gong Yuwei
