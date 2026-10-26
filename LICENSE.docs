@@ -1,0 +1,23 @@
+# Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+
+Unless a file says otherwise, or is listed as third-party in `NOTICE`, every non-code
+artifact in this repository is licensed under the Creative Commons
+Attribution-NonCommercial-ShareAlike 4.0 International Public License:
+
+- https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
+
+Copyright (c) 2026 Gong Yuwei
+
+You are free to copy and redistribute the material in any medium or format, and to
+remix, transform and build upon it, subject to:
+
+- **Attribution** — give appropriate credit, link to the license, and indicate changes.
+- **NonCommercial** — no use of the material primarily for or directed toward
+  commercial advantage or monetary compensation.
+- **ShareAlike** — derivatives must be distributed under this same license.
+
+There is no warranty. Read the legal code for the exact terms; it governs over this
+summary.
+
+**Code in this repository is not under this license.** Code is licensed under
+PolyForm Noncommercial License 1.0.0 — see `LICENSE`.
