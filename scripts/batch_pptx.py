@@ -87,6 +87,21 @@ T = {
   "「{term}」典型故障：成本失控——无预算上限的重试风暴；处置是自主性预算。",
   "「{term}」典型故障：上下文漂移——长任务丢失目标；处置是检查点与摘要不变量。",
  ],
+ "hitl": [
+  "「{term}」的高风险动作必须人工把关：中断（waiting_approval）→ 审批人核验完整上下文 → 批准/拒绝 → 自动恢复或取消。",
+  "「{term}」的审批单要带全审计：动作、参数、发起者、decided_by、decided_at —— 事后可追责。",
+  "「{term}」走 ApprovalPort 合同：manual 模式中断在 human_gate，auto 模式降级演示自动通过。",
+ ],
+ "jwt": [
+  "「{term}」的访问控制用 JWT+RBAC：登录签发 HS256 令牌，四角色×管理域矩阵，越权 403。",
+  "「{term}」的口令安全用 pbkdf2 哈希存储，密钥走环境变量 —— 大厂安全基线。",
+  "「{term}」的未认证请求一律 401，角色不足 403，杜绝静默放行。",
+ ],
+ "queue": [
+  "「{term}」的异步任务经 Pulsar 优先/Redis 兜底队列：入队 queued → Worker 消费 running → 终态落库。",
+  "「{term}」的任务幂等设计：NACK 重试 + DeadLetterPolicy 兜底，毒丸不阻塞队列。",
+  "「{term}」的任务状态全生命周期落库：queued/running/waiting_approval/succeeded/canceled 可查询。",
+ ],
  "optimize": [
   "「{term}」优化一：把人工经验固化为资产（规则/Skill/Eval），随模型共同进化。",
   "「{term}」优化二：建立基线对照（关闭/盲选/受控三组）证明增量价值。",
@@ -527,6 +542,23 @@ def build_plan_v3(ch: dict, num: str, scheme: dict) -> dict:
                   "CONCLUSION": clean(f"「{term}」的选型以证据与约束为准", 20)}
         dk.content(num, sec, "table_decision", f"工程决策：{term}",
                    "候选方案 × 取舍（ADR）", sp_adr)
+        # 生产化机制页（第三轮新增能力的落地映射）
+        sp_hitl = {"HEAD_01": "阶段", "HEAD_02": "机制", "HEAD_03": "审计/落点",
+                   "ROW_01_01": "中断", "ROW_01_02": "ApprovalPending", "ROW_01_03": "waiting_approval",
+                   "ROW_02_01": "决议", "ROW_02_02": "decided_by/at", "ROW_02_03": "approve/reject",
+                   "ROW_03_01": "恢复", "ROW_03_02": "pre_approved", "ROW_03_03": "succeeded/canceled",
+                   "CONCLUSION": clean("HITL：中断-审批-恢复 全真实落库", 20)}
+        dk.content(num, sec, "table_decision", f"生产化：{term}",
+                   "企业级落地三机制", sp_hitl)
+        dk.content(num, sec, "metrics_evidence", f"企业治理：{term}",
+                   "三项已闭合边界",
+                   {"METRIC_01_VALUE": "JWT", "METRIC_01_LABEL": "HS256+四角色RBAC",
+                    "METRIC_02_VALUE": "队列", "METRIC_02_LABEL": "Pulsar/Redis Worker落库",
+                    "METRIC_03_VALUE": "审批", "METRIC_03_LABEL": "HITL 中断-恢复",
+                    "EVIDENCE_01_INDEX": "01", "EVIDENCE_01_LABEL": "认证",
+                    "EVIDENCE_01_DETAIL": "未认证401/越权403（LAN实测）",
+                    "EVIDENCE_02_INDEX": "02", "EVIDENCE_02_LABEL": "队列",
+                    "EVIDENCE_02_DETAIL": "queued→running→终态全落库（LAN实测）"})
         dk.content(num, sec, "metrics_evidence", f"优化拓展：{term}",
                    "三个可持续优化抓手",
                    {"METRIC_01_VALUE": "资产化", "METRIC_01_LABEL": "经验固化为规则/Skill",
