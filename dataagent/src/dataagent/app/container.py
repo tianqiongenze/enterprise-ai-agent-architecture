@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+import os
 
 from ..adapters.llm.fake_client import FakeLlmClient
 from ..contracts.model import ModelCapability
@@ -120,6 +121,7 @@ class DataAgentContainer:
             approval=self.approval,
             idem=self.idem,
             harness_runner=lambda run, ctx: self.harness.run(run, "ten_a"),
+            approval_mode=os.getenv("DATAAGENT_APPROVAL_MODE", "auto"),
         )
 
         # ---- Security (第二/七篇) ----

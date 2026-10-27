@@ -8,10 +8,11 @@ strawberry-graphql>=0.227
 prometheus-client>=0.20
 asyncpg>=0.29
 starlette>=0.37
+PyJWT>=2.8
 
 # 生产接入真实中间件时额外安装（InfraProvider 会自动启用真实驱动的路径）
-# asyncpg>=0.29
-# redis>=5.0
+asyncpg>=0.29
+redis>=5.0
 # pulsar-client>=3.4
 # nebula3>=3.8
 # pymilvus>=2.4

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from ...contracts.runtime import (
+    ApprovalPendingError,
     Action,
     ApprovalDecision,
     ApprovalPort,
@@ -153,14 +154,19 @@ class DurableWorkflowExecutor:
         approval: HumanApprovalGate,
         idem: IdempotencyStore,
         harness_runner: Optional[Callable[[Run, dict[str, Any]], Run]] = None,
+        approval_mode: str = "auto",  # auto=演示自动通过 | manual=真实审批(中断-恢复)
     ):
         self.store = store
         self.approval = approval
         self.idem = idem
         self.harness_runner = harness_runner
+        self.approval_mode = approval_mode
 
-    def execute(self, wf: WorkflowDefinition, run: Run) -> Run:
-        """执行工作流；若 Run 已有 Checkpoint 则从中恢复（Resume）。"""
+    def execute(self, wf: WorkflowDefinition, run: Run, pre_approved: Optional[dict[str, Any]] = None) -> Run:
+        """执行工作流；若 Run 已有 Checkpoint 则从中恢复（Resume）。
+
+        pre_approved: 恢复执行时由上层注入的审批决议（{"action": {"decision": "approved", "by": ...}}），
+        实现 HITL 的 interrupt/resume —— 人工审批真实发生后工作流才继续。"""
         cp = self.store.load_checkpoint(run.run_id)
         start_idx = 0
         executed = set()
@@ -187,22 +193,55 @@ class DurableWorkflowExecutor:
                 if node.kind == "harness" and self.harness_runner is not None:
                     run = self.harness_runner(run, {"node": node.name})
                 elif node.kind == "human_gate":
-                    req_id = self.approval.request(run.run_id, node.approval_action or node.name, {})
-                    run.add_event(EventType.APPROVAL_REQUESTED, step_id=step.step_id, data={"request_id": req_id})
-                    run.status = RunStatus.WAITING_APPROVAL
-                    self.store.save(run)
-                    self.store.save_checkpoint(run.to_checkpoint())
-                    # 真实场景：这里会阻塞等待人工决议；演示中自动决议已在 ApprovalPort 处理
-                    if self.approval.is_approved(req_id):
-                        run.add_event(EventType.APPROVAL_RESOLVED, step_id=step.step_id, data={"approved": True})
-                        step.output = {"approved": True, "request_id": req_id}
+                    action = node.approval_action or node.name
+                    decision = (pre_approved or {}).get(action)
+                    if decision and decision.get("decision") == "approved":
+                        # 审批人已真实批准（恢复执行）：留痕后放行
+                        run.add_event(EventType.APPROVAL_RESOLVED, step_id=step.step_id,
+                                      data={"approved": True, "by": decision.get("by", ""),
+                                            "action": action})
+                        step.output = {"approved": True, "by": decision.get("by", "")}
+                    elif decision and decision.get("decision") == "rejected":
+                        run.add_event(EventType.APPROVAL_RESOLVED, step_id=step.step_id,
+                                      data={"approved": False, "by": decision.get("by", "")})
+                        run.status = RunStatus.CANCELED
+                        step.status = StepStatus.SUCCEEDED
+                        step.output = {"approved": False, "canceled": True}
+                        self.store.save(run)
+                        self.store.save_checkpoint(run.to_checkpoint())
+                        return run
+                    elif self.approval_mode == "manual":
+                        # 真实审批模式：在此中断（interrupt），由上层创建审批单并持久化；
+                        # 审批通过后带 pre_approved 恢复（resume）。
+                        run.status = RunStatus.WAITING_APPROVAL
+                        run.add_event(EventType.APPROVAL_REQUESTED, step_id=step.step_id,
+                                      data={"action": action, "params": dict(step.input or {})})
+                        self.store.save(run)
+                        self.store.save_checkpoint(run.to_checkpoint())
+                        raise ApprovalPendingError(action, dict(step.input or {}))
                     else:
-                        step.output = {"approved": False, "request_id": req_id}
+                        req_id = self.approval.request(run.run_id, action, {})
+                        run.add_event(EventType.APPROVAL_REQUESTED, step_id=step.step_id, data={"request_id": req_id})
+                        run.status = RunStatus.WAITING_APPROVAL
+                        self.store.save(run)
+                        self.store.save_checkpoint(run.to_checkpoint())
+                        if self.approval.is_approved(req_id):
+                            run.add_event(EventType.APPROVAL_RESOLVED, step_id=step.step_id, data={"approved": True})
+                            step.output = {"approved": True, "request_id": req_id}
+                        else:
+                            step.output = {"approved": False, "request_id": req_id}
                 else:  # task / verifier
                     if node.fn is not None:
                         step.output = node.fn(run, step.input) or {}
                 step.status = StepStatus.SUCCEEDED
                 step.finished_at = time.time()
+            except ApprovalPendingError:
+                # 审批中断不是故障：向上传播以创建审批单（HITL interrupt）
+                step.status = StepStatus.WAITING_APPROVAL
+                step.finished_at = time.time()
+                self.store.save(run)
+                self.store.save_checkpoint(run.to_checkpoint())
+                raise
             except Exception as e:  # noqa: BLE001
                 step.status = StepStatus.FAILED
                 step.error = str(e)

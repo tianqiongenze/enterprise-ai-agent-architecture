@@ -212,3 +212,15 @@ class Action:
     executed: bool = False
     result: Optional[dict[str, Any]] = None
     approval_required: bool = False
+
+class ApprovalPendingError(Exception):
+    """手工审批模式下，工作流在 human_gate 处中断（可恢复暂停）。
+
+    携带动作名与参数，供上层(API/Worker)创建审批单并落库；
+    审批通过后以 pre_approved 决策恢复执行 —— 即 HITL 的 interrupt/resume 语义。
+    """
+
+    def __init__(self, action: str, params: dict | None = None):
+        super().__init__(f"approval pending: {action}")
+        self.action = action
+        self.params = dict(params or {})

@@ -23,7 +23,8 @@
 │   ├── 07-部署运行-工业级.md        # 对接真实中间件 + Granian/Pulsar 生产参数 + 踩坑
 │   ├── 08-全链路测试报告.md
 │   ├── 09-PPT质量评审与优化.md
-│   └── 10-人工测试操作指南.md          # 真实场景功能+性能压测实测、≥1亿行数据生成、k6+Locust
+│   ├── 10-人工测试操作指南.md
+│   └── 11-大纲全面复审与缺口闭合.md          # 真实场景功能+性能压测实测、≥1亿行数据生成、k6+Locust
 ├── dataagent/                     # 贯穿项目：多租户零售 DataAgent 内核（可离线跑）
 │   ├── src/dataagent/             # contracts / domain / infra / adapters / app
 │   ├── tests/                     # 单元/集成/故障注入 测试（TDD）
@@ -52,8 +53,10 @@
 
 ## 在线人工测试（局域网浏览器直接用）
 
-**测试控制台**：`http://10.167.2.175:30080/console`（GraphiQL: `/graphql` · 指标: `/metrics`）
-完整人工测试用例（TC-01~TC-12）见 `docs/10-人工测试操作指南.md`。
+**B 端控制台**：`http://10.167.2.175:30080/console`（JWT 登录：admin/admin123 · approver/approve123 · analyst/analyst123）
+含：概览/任务中心/**审批中心(HITL)**/租户管理/指标注册中心/模型路由/Capability权限矩阵/Memory管理/发布与灰度/API测试。
+异步任务经 Worker（Pulsar 优先/Redis 兜底）真实落库；人工测试用例 TC-01~TC-16 见 `docs/10-人工测试操作指南.md`；
+大纲需求覆盖复审见 `docs/11-大纲全面复审与缺口闭合.md`。
 
 ## 快速开始（全程离线，无需任何外部 API）
 

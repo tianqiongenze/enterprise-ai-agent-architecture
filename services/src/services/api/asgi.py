@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Litestar 应用工厂 + 路由 —— 企业级 API 入口 (多端：Web/移动/内部 Worker)。
+"""DataAgent 企业级 API（Litestar + Granian）。
 
-- Litestar（全异步）提供路由、校验、依赖注入、OpenAPI。
-- Granian 作为 RSGI 运行时（生产），本模块可被 `granian services.api.asgi:app` 加载，
-  也可在本地由普通 ASGI 服务器（uvicorn/hypercorn）用同一 app 对象。
-- 端点：
-  POST /v1/analysis      同步提交一次经营分析（网关：请求ID/幂等/限流）
-  POST /v1/analysis/async 异步入队(Pulsar)并返回 task_id（百万并发友好）
-  GET  /v1/tasks/{id}    查询任务状态/Run Timeline
-  GET  /healthz           存活
-  GET  /readyz            就绪(依赖中间件)
+第 1 层完整落地：B端控制台(SPA) + API Gateway + Auth(JWT)/Tenant/RBAC/Quota。
+- / 与 /console → B 端控制台 SPA（登录后可用全部管理页）
+- /login → JWT 签发（pbkdf2 校验，用户 CRDB+Redis）
+- 业务与管理路由全部 JWT + RBAC 域校验；/healthz /readyz /metrics /graphql 公开
+- POST /v1/analysis async_=true → 真实队列（Pulsar 优先/Redis 兜底）→ Worker 消费落库
+- 审批 resolve → 后台恢复工作流（HITL interrupt/resume 真实闭环）
 """
 from __future__ import annotations
 
@@ -17,36 +14,93 @@ import asyncio
 import os
 import sys
 import time
+import traceback as _tb
 from typing import Any, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "dataagent", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
-from litestar import Litestar, Response, get, post
+from litestar import Litestar, Request, Response, get, post
 from litestar.di import Provide
-
-from litestar.handlers import get as _get, post as _post
-from litestar.exceptions import HTTPException
-import traceback as _tb
+from litestar.exceptions import HTTPException, PermissionDeniedException
 from pydantic import BaseModel, Field
 
+from services.api import admin as ADM
+from services.api import auth as AUTH
+from services.api.console_spa import SPA
 from services.shared.runtime import (
-    InfraProvider,
     IdempotencyGuard,
+    InfraProvider,
     RateLimiter,
-    RequestContext,
     Settings,
     new_request_context,
 )
 
 
-# ---------------- 请求/响应模型 ----------------
+# ---------------- 请求模型 ----------------
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 class AnalysisRequest(BaseModel):
-    query: str = Field(..., min_length=2, max_length=2000, description="经营分析问题")
+    query: str = Field(..., min_length=2, max_length=2000)
     tenant_id: str = Field(default="ten_a")
     user_id: str = Field(default="u1")
     idempotency_key: str = Field(default="")
-    async_: bool = Field(default=False, description="是否异步入队")
+    async_: bool = Field(default=False)
+
+
+class TenantUpsert(BaseModel):
+    tenant_id: str
+    name: str = ""
+    plan: str = "standard"
+    roles: str = "analyst"
+    row_filter: Optional[str] = None
+    col_filter: Optional[str] = None
+    quota_rps: int = 60
+    status: str = "active"
+
+
+class MetricUpsert(BaseModel):
+    name: str
+    display_name: str = ""
+    formula: str = ""
+    aliases: str = ""
+    dimension: str = "amount"
+    owner: str = "platform"
+    status: str = "active"
+
+
+class RouteUpsert(BaseModel):
+    task: str
+    primary_model: str
+    fallback_models: str = ""
+    max_attempts: int = 3
+    timeout_s: int = 60
+    cost_cap: float = 10
+    status: str = "active"
+
+
+class MemoryWrite(BaseModel):
+    key: str
+    content: str
+    scope: str = "user"
+    owner: str = "u1"
+    tenant_id: str = "ten_a"
+
+
+class ResolveRequest(BaseModel):
+    decision: str  # approved / rejected
+
+
+class ReleaseState(BaseModel):
+    version: str = "0.2.0"
+    canary_pct: int = 0
+    kill_switch: bool = False
+    regression_gate: dict = {"code": 0.8}
+    released_versions: list = ["0.1.0", "0.2.0"]
+    history: list = []
 
 
 class TaskResponse(BaseModel):
@@ -57,45 +111,51 @@ class TaskResponse(BaseModel):
     detail: str = ""
 
 
-# ---------------- 依赖容器（应用单例） ----------------
 class AppState:
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or Settings()
         self.infra = InfraProvider(self.settings)
         self.idem = IdempotencyGuard()
-        # 每租户 RPS：默认 60，可由环境覆盖（生产按租户/套餐差异配置）
-        per_tenant_rps = float(os.getenv("DATAAGENT_GATEWAY_RPS_PER_TENANT", "60"))
+        per = float(os.getenv("DATAAGENT_GATEWAY_RPS_PER_TENANT", "60"))
         burst = float(os.getenv("DATAAGENT_GATEWAY_BURST", "200"))
-        self.rate = RateLimiter(per_tenant_rps=per_tenant_rps, burst=burst)
+        self.rate = RateLimiter(per_tenant_rps=per, burst=burst)
         self._container: Any = None
 
     def container(self):
-        # 懒加载 DataAgent 内核容器（离线也可用）
         if self._container is None:
-            try:
-                from dataagent.app.container import DataAgentContainer, default_seed
-                self._container = DataAgentContainer(seed_orders=default_seed())
-            except Exception as e:  # pragma: no cover
-                self._container = {"error": str(e)}
+            from dataagent.app.container import DataAgentContainer, default_seed
+            self._container = DataAgentContainer(seed_orders=default_seed())
         return self._container
 
 
-# 单例状态：保证限流/幂等在同一进程内共享（多副本间由 Redis 承担）
+def get_state() -> AppState:
+    return init_state()
+
+
 _SINGLETON: Optional[AppState] = None
 
 
-async def init_state(settings: Optional[Settings] = None) -> AppState:
+def init_state(settings: Optional[Settings] = None) -> AppState:
     global _SINGLETON
     if _SINGLETON is None:
         _SINGLETON = AppState(settings)
     return _SINGLETON
 
 
-async def get_state() -> AppState:
-    return await init_state()
+# ---------------- RBAC guard ----------------
+def guard_domain(domain: str):
+    def _guard(request: Request, *args: Any, **kwargs: Any) -> None:
+        user = request.scope.get("user")
+        if user is None:
+            from litestar.exceptions import NotAuthorizedException
+            raise NotAuthorizedException(detail=f"{domain} 需要登录")
+        if not user.can(domain):
+            raise PermissionDeniedException(detail=f"角色 {user.role} 无 {domain} 权限（RBAC）")
+    _guard.__name__ = f"guard_{domain}"
+    return _guard
 
 
-# ---------------- 处理器 ----------------
+# ---------------- 公共路由 ----------------
 @get("/healthz")
 async def healthz() -> dict[str, object]:
     return {"status": "alive", "ts": time.time()}
@@ -108,51 +168,74 @@ async def readyz(app_state: AppState) -> dict[str, object]:
         cache = await app_state.infra.get_cache()
         if hasattr(cache, "ping"):
             await cache.ping()
-    except Exception:  # pragma: no cover
+    except Exception:  # noqa: BLE001
         redis_ok = False
     return {"status": "ready" if redis_ok else "degraded", "redis": redis_ok}
 
 
-@post("/v1/analysis")
-async def create_analysis(
-    data: AnalysisRequest,
-    app_state: AppState,
-) -> dict[str, object]:
-    from litestar import status_codes
-    from litestar.exceptions import HTTPException
+@get("/metrics")
+async def metrics() -> Response:
+    try:
+        from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+        REQ = Counter("dataagent_http_requests_total", "requests")
+        REQ.inc()
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    except Exception:  # noqa: BLE001
+        return Response(content=b"metrics_disabled", media_type="text/plain")
 
+
+@post("/login")
+async def login(data: LoginRequest) -> dict:
+    dsn = os.getenv("DATAAGENT_DATABASE_URL", "")
+    user = await AUTH.login(dsn, data.username, data.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    return {"token": AUTH.make_token(user),
+            "user": {"username": user.username, "role": user.role,
+                     "full_name": user.full_name, "tenant": user.tenant}}
+
+
+# ---------------- SPA ----------------
+@get("/", media_type="text/html")
+async def console_root() -> Response:
+    return Response(content=SPA, media_type="text/html")
+
+
+@get("/console", media_type="text/html")
+async def console_page() -> Response:
+    return Response(content=SPA, media_type="text/html")
+
+
+# ---------------- 分析（业务） ----------------
+@post("/v1/analysis", guards=[guard_domain("analysis")])
+async def create_analysis(request: Request, data: AnalysisRequest, app_state: AppState) -> dict:
     ctx = new_request_context(data.tenant_id, data.user_id)
-    # 限流
+    # 每租户限流（Quota）
     if not app_state.rate.allow(data.tenant_id):
         raise HTTPException(status_code=429, detail="rate_limited")
-    # 幂等
-    if data.idempotency_key:
-        if not app_state.idem.try_acquire(data.tenant_id, data.user_id, data.idempotency_key):
-            raise HTTPException(status_code=409, detail="duplicate_request")
-
+    if data.idempotency_key and not app_state.idem.try_acquire(
+            data.tenant_id, data.user_id, data.idempotency_key):
+        raise HTTPException(status_code=409, detail="duplicate_request")
     if data.async_:
-        # 异步入队(Pulsar) —— 百万并发友好
-        await app_state.infra.publish(app_state.settings.pulsar_topic, {
-            "kind": "analysis",
-            "query": data.query,
-            "tenant_id": data.tenant_id,
-            "user_id": data.user_id,
-            "request_id": ctx.request_id,
-        })
-        return TaskResponse(
-            request_id=ctx.request_id, task_id=ctx.request_id, status="queued",
-            detail="已入队(Pulsar)，由 Worker 异步执行",
-        ).model_dump()
-
-    # 同步：直接调用内核（离线可演示）；失败写盘以便诊断
+        from services.shared import queue as q
+        task = {"kind": "analysis", "query": data.query, "tenant_id": data.tenant_id,
+                "user_id": data.user_id, "request_id": ctx.request_id}
+        q.enqueue(task)
+        try:  # 任务表立即可见（queued）；CRDB 尽力 + 必写镜像
+            from dataagent.infra.persistence import cockroach as cr
+            rec = {**task, "task_id": ctx.request_id, "status": "queued"}
+            try:
+                await cr.upsert_task(os.getenv("DATAAGENT_DATABASE_URL", ""), rec)
+            except Exception:  # noqa: BLE001
+                pass
+            await cr.mirror_task_to_redis(rec)
+        except Exception:  # noqa: BLE001
+            pass
+        return TaskResponse(request_id=ctx.request_id, task_id=ctx.request_id, status="queued",
+                            detail="已入队（Pulsar 优先/Redis 兜底），Worker 异步消费落库").model_dump()
     try:
         result = await asyncio.to_thread(_run_sync, app_state, data)
     except Exception as e:  # noqa: BLE001
-        try:
-            import pathlib as _pl
-            (_pl.Path(os.path.expanduser("~/dataagent_api_err.log"))).write_text(_tb.format_exc(), encoding="utf-8")
-        except Exception:  # noqa: BLE001
-            pass
         return {"error": "analysis_failed", "message": str(e)}
     return {"request_id": ctx.request_id, "status": "succeeded", "run": result}
 
@@ -160,14 +243,30 @@ async def create_analysis(
 def _run_sync(app_state: AppState, data: AnalysisRequest) -> dict:
     from dataagent.contracts.runtime import Run
     c = app_state.container()
-    run: Run = c.analyze(data.query, data.tenant_id)
-    # 配置了 CRDB 时同步落库 → 使 GET /v1/tasks/{run_id} 与 GraphQL task(runId) 人工可查
+    try:
+        run: Run = c.analyze(data.query, data.tenant_id)
+    except Exception as e:  # noqa: BLE001  manual 审批模式：同步路径同样中断为待审批
+        name = type(e).__name__
+        if "ApprovalPending" in name:
+            import asyncio as _aio
+            from dataagent.infra.persistence import cockroach as cr
+            dsn0 = os.getenv("DATAAGENT_DATABASE_URL", "")
+            rec = {"task_id": "pending_sync_" + str(int(time.time())), "kind": "analysis",
+                   "tenant_id": data.tenant_id, "user_id": data.user_id,
+                   "query": data.query, "status": "waiting_approval"}
+            try:
+                _aio.run(cr.mirror_task_to_redis(rec))
+            except Exception:  # noqa: BLE001
+                pass
+            return {"run_id": "", "status": "waiting_approval",
+                    "steps": [], "events": 0, "detail": "manual 审批模式：请经异步任务+审批中心完成闭环"}
+        raise
     dsn = os.getenv("DATAAGENT_DATABASE_URL")
     if dsn:
         from dataagent.infra.persistence import cockroach as cr
         payload = {"task_id": run.run_id, "status": run.status.value, "steps": len(run.steps),
                    "events": len(run.events), "tenant_id": run.tenant_id, "query": run.query}
-        for attempt in range(2):  # 闸门瞬时饱和时退避重试一次
+        for attempt in range(2):
             try:
                 import asyncio as _aio
                 _aio.run(cr.CockroachRunStore(dsn).save(run))
@@ -175,65 +274,165 @@ def _run_sync(app_state: AppState, data: AnalysisRequest) -> dict:
                 break
             except Exception:  # noqa: BLE001
                 import time as _t; _t.sleep(1.5 * (attempt + 1))
-        # CRDB 仍失败时至少写 Redis 镜像，保证 /v1/tasks 人工可查
         else:
             import asyncio as _aio
             _aio.run(cr.mirror_run_to_redis(run.run_id, payload))
-    return {
-        "run_id": run.run_id,
-        "status": run.status.value,
-        "steps": [{"name": s.name, "status": s.status.value, "output": s.output} for s in run.steps],
-        "events": len(run.events),
-    }
+    return {"run_id": run.run_id, "status": run.status.value,
+            "steps": [{"name": s.name, "status": s.status.value, "output": s.output} for s in run.steps],
+            "events": len(run.events)}
 
 
-# ---------------- 读写分离：REST(读/写) + GraphQL(Query 读 / Mutation 写) ----------------
-@get("/v1/tasks/{task_id:str}")
-async def get_task(task_id: str, app_state: AppState) -> dict[str, object]:
-    # 读侧：从 CRDB(可只读副本) 读任务，避免写侧耦合
-    from litestar.exceptions import HTTPException
+@get("/v1/tasks/{task_id:str}", guards=[guard_domain("tasks")])
+async def get_task(task_id: str) -> dict:
     dsn = os.getenv("DATAAGENT_DATABASE_URL")
-    if not dsn:
-        raise HTTPException(status_code=404, detail="no datastore configured")
     from dataagent.infra.persistence import cockroach as cr
+    try:
+        t = await cr.get_task(dsn, task_id)
+        if t:
+            return t
+    except Exception:  # noqa: BLE001
+        pass
+    m = await cr.read_task_mirror(task_id)
+    if m:
+        return m
+    # 兼容旧同步 run_id
     try:
         rs = cr.CockroachRunStore(dsn)
         run = await rs.load(task_id)
         return {"task_id": run.run_id, "status": run.status.value,
                 "steps": len(run.steps), "events": len(run.events)}
-    except Exception:  # noqa: BLE001  闸门饱和/未落库 → Redis 镜像
-        mirror = await cr.read_run_mirror(task_id)
-        if mirror:
-            return mirror
+    except Exception:  # noqa: BLE001
+        m2 = await cr.read_run_mirror(task_id)
+        if m2:
+            return m2
         raise HTTPException(status_code=404, detail="task not found")
 
 
-@get("/metrics")
-async def metrics() -> dict[str, object]:
-    """Prometheus 指标端点（进程级）。"""
+# ---------------- 概览 ----------------
+@get("/v1/admin/dashboard", guards=[guard_domain("tasks")])
+async def dashboard() -> dict:
+    return await ADM.dashboard()
+
+
+# ---------------- 租户管理 ----------------
+@get("/v1/admin/tenants", guards=[guard_domain("tenants")])
+async def tenants_list() -> list:
+    return await ADM.tenants_list()
+
+
+@post("/v1/admin/tenants", guards=[guard_domain("tenants")])
+async def tenants_upsert(data: TenantUpsert) -> dict:
+    return await ADM.tenant_upsert(data.model_dump())
+
+
+# ---------------- 指标注册中心 ----------------
+@get("/v1/admin/metrics", guards=[guard_domain("metrics")])
+async def metrics_list() -> list:
+    return await ADM.metrics_list()
+
+
+@post("/v1/admin/metrics", guards=[guard_domain("metrics")])
+async def metric_upsert(data: MetricUpsert) -> dict:
+    return await ADM.metric_upsert(data.model_dump())
+
+
+# ---------------- 模型路由 ----------------
+@get("/v1/admin/routes", guards=[guard_domain("routing")])
+async def routes_list() -> list:
+    return await ADM.routes_list()
+
+
+@post("/v1/admin/routes", guards=[guard_domain("routing")])
+async def route_upsert(data: RouteUpsert) -> dict:
+    return await ADM.route_upsert(data.model_dump())
+
+
+# ---------------- Capability 权限矩阵 ----------------
+@get("/v1/admin/capability", guards=[guard_domain("capability")])
+async def capability() -> dict:
+    return ADM.capability_matrix()
+
+
+# ---------------- Memory 管理 ----------------
+@get("/v1/admin/memory", guards=[guard_domain("memory")])
+async def memory_list(limit: int = 50, tenant_id: str = "ten_a") -> list:
+    return await ADM.memory_list(tenant_id, limit)
+
+
+@post("/v1/admin/memory", guards=[guard_domain("memory")])
+async def memory_write(data: MemoryWrite) -> dict:
+    return await ADM.memory_write(data.model_dump())
+
+
+@post("/v1/admin/memory/{memory_id:str}/delete", guards=[guard_domain("memory")])
+async def memory_delete(memory_id: str, tenant_id: str = "ten_a") -> dict:
+    ok = await ADM.memory_delete(memory_id, tenant_id)
+    return {"deleted": ok}
+
+
+# ---------------- 审批中心（真实 HITL） ----------------
+@get("/v1/admin/approvals", guards=[guard_domain("approvals")])
+async def approvals_list(status: str = "pending") -> list:
+    return await ADM.approvals_list(status)
+
+
+@get("/v1/admin/approvals/{approval_id:str}", guards=[guard_domain("approvals")])
+async def approval_get(approval_id: str) -> dict:
+    a = await ADM.approval_get(approval_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="approval not found")
+    return a
+
+
+@post("/v1/admin/approvals/{approval_id:str}/resolve", guards=[guard_domain("approvals")])
+async def approval_resolve(approval_id: str, data: ResolveRequest, request: Request) -> dict:
+    if data.decision not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="decision 必须为 approved/rejected")
+    by = getattr(request.user, "username", "unknown")
+    a = await ADM.approval_resolve(approval_id, data.decision, by)
+    if not a:
+        raise HTTPException(status_code=404, detail="审批单不存在或已决议")
+    task_status = "resume_pending"
     try:
-        from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
-        REQ = Counter("dataagent_http_requests_total", "requests")
-        REQ.inc()
-        from litestar import Response
-        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
-    except Exception:  # noqa: BLE001
-        return {"error": "metrics_disabled"}
+        from services.worker.main import resume_after_approval
+        task_status = await resume_after_approval(a)
+    except Exception as e:  # noqa: BLE001
+        task_status = f"resume_failed: {str(e)[:80]}"
+    return {"approval_id": approval_id, "decision": data.decision, "decided_by": by,
+            "task_status": task_status}
 
 
-# ---------------- 应用 ----------------
+# ---------------- 任务中心 ----------------
+@get("/v1/admin/tasks", guards=[guard_domain("tasks")])
+async def tasks_list(status: str = "", limit: int = 50) -> list:
+    return await ADM.tasks_list(status, limit)
+
+
+# ---------------- 发布与灰度 ----------------
+@get("/v1/admin/release", guards=[guard_domain("release")])
+async def release_get() -> dict:
+    return await ADM.release_state()
+
+
+@post("/v1/admin/release", guards=[guard_domain("release")])
+async def release_save(data: ReleaseState) -> dict:
+    st = data.model_dump()
+    st.setdefault("history", [])
+    return await ADM.release_save(st)
+
+
+# ---------------- 应用组装 ----------------
 def _on_exc(request, exc: Exception):
-    import pathlib as _pl
     try:
+        import pathlib as _pl
         (_pl.Path(os.path.expanduser("~/dataagent_api_err.log"))).write_text(_tb.format_exc(), encoding="utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
     from litestar import Response
-    return Response(content={"error": "internal_error", "detail": str(exc)},
-                    status_code=500)
+    return Response(content={"error": "internal_error", "detail": str(exc)}, status_code=500)
 
 
-# 挂载 GraphQL（读写分离）：Strawberry 是标准 ASGI 应用，作为 handler 传入 Litestar 构造
+# GraphQL（Strawberry ASGI）
 _gql_handler = None
 try:
     from strawberry.asgi import GraphQL as StrawberryGraphQL
@@ -246,113 +445,39 @@ try:
         await _gql_app(scope, receive, send)
 
     _gql_handler = _asgi_handler("/graphql", is_mount=True)(_gql_endpoint)
-except Exception as _e:  # noqa: BLE001   (未安装 strawberry 时跳过)
+except Exception:  # noqa: BLE001
     _gql_handler = None
 
 
-def _with_graphql(routes):
-    if _gql_handler is not None:
-        return [*routes, _gql_handler]
-    return routes
+PUBLIC = [r"^/$", r"^/console$", r"^/login$", r"^/healthz$", r"^/readyz$", r"^/metrics$", r"^/graphql$"]
 
+_handlers = [console_root, console_page, login, healthz, readyz, metrics,
+             create_analysis, get_task,
+             dashboard,
+             tenants_list, tenants_upsert,
+             metrics_list, metric_upsert,
+             routes_list, route_upsert,
+             capability,
+             memory_list, memory_write, memory_delete,
+             approvals_list, approval_get, approval_resolve,
+             tasks_list,
+             release_get, release_save]
+if _gql_handler is not None:
+    _handlers.append(_gql_handler)
 
-CONSOLE_HTML = """<!DOCTYPE html>
-<html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DataAgent 人工测试控制台</title>
-<style>
-:root{--p:#0e7490;--pd:#0a5568;--acc:#06b6d4;--bg:#f5f7fa;--ink:#1f2937;--mut:#6b7280;--ok:#059669;--err:#dc2626;--warn:#d97706}
-*{box-sizing:border-box;margin:0}
-body{font-family:"Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--ink);padding:18px}
-header{background:var(--p);color:#fff;padding:14px 18px;border-radius:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-header h1{font-size:18px} header .u{font-size:12px;opacity:.9}
-main{max-width:1180px;margin:16px auto;display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
-.card h2{font-size:14px;color:var(--pd);margin-bottom:10px;border-left:4px solid var(--acc);padding-left:8px}
-label{font-size:12px;color:var(--mut);display:block;margin:6px 0 3px}
-input,select,textarea{width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit}
-textarea{min-height:64px;resize:vertical}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}
-.row>*{flex:1;min-width:120px}
-button{background:var(--p);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer;margin-top:8px}
-button:hover{background:var(--pd)} button.ghost{background:#fff;color:var(--p);border:1px solid var(--p)}
-pre{background:#0f172a;color:#abb2bf;padding:10px;border-radius:8px;font-size:12px;max-height:260px;overflow:auto;white-space:pre-wrap;font-family:Consolas,monospace}
-.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;margin-left:6px}
-.ok{background:#d1fae5;color:var(--ok)} .err{background:#fee2e2;color:var(--err)} .warn{background:#fef3c7;color:var(--warn)}
-.hint{font-size:12px;color:var(--mut);margin-top:8px;line-height:1.6}
-.full{grid-column:1/-1}
-</style></head><body>
-<header><h1>DataAgent 人工测试控制台</h1>
-<div class="u">Base: <input id="base" style="width:260px;padding:3px 6px;border:0;border-radius:4px" value="">
-<a href="/graphql" target="_blank" style="color:#a5f3fc;margin-left:10px">GraphiQL ↗</a>
-<a href="/metrics" target="_blank" style="color:#a5f3fc;margin-left:8px">Metrics ↗</a></div></header>
-<main>
-<div class="card"><h2>① 健康检查</h2>
-<div class="row"><button onclick="get('/healthz','o1')">GET /healthz</button>
-<button onclick="get('/readyz','o1')">GET /readyz</button></div>
-<pre id="o1">点击按钮检测存活/就绪</pre>
-<div class="hint">预期：healthz → <b>{"status":"alive"}</b>；readyz → <b>{"status":"ready"}</b>。任意节点 IP 皆可（175/176）。</div></div>
-
-<div class="card"><h2>② 提交经营分析</h2>
-<label>租户 tenant_id</label><select id="tenant"><option>ten_a</option><option>ten_b</option><option>ten_c</option></select>
-<label>用户 user_id</label><input id="user" value="u1">
-<label>分析问题 query</label><input id="q" value="华东区本月 GMV 下滑原因诊断">
-<label>幂等键 idempotency_key（重复提交应 409）</label>
-<div class="row"><input id="idem" placeholder="留空=不启用幂等"><button class="ghost" style="flex:0" onclick="idem.value='idem-'+Date.now()">生成</button></div>
-<div class="row"><button onclick="submit(false)">同步分析</button><button onclick="submit(true)">异步入队</button></div>
-<pre id="o2">同步=等结果（可复制 run_id）；异步=入队（内存队列演示模式）</pre>
-<div class="hint">预期：HTTP <b>201</b> + run.steps 含 plan/query/analyze/conclusion。相同幂等键再点 → <b>409 duplicate_request</b>。</div></div>
-
-<div class="card"><h2>③ 任务查询（用②返回的 run_id）</h2>
-<div class="row"><input id="rid" placeholder="run_xxxxxxxxxx"><button onclick="get('/v1/tasks/'+rid.value.trim(),'o3')">GET /v1/tasks/{run_id}</button></div>
-<pre id="o3">先在②同步执行一次，复制 run_id 到这里查询（结果已落 CockroachDB）</pre>
-<div class="hint">预期：200 + {"status":"succeeded","steps":7,...}；乱填 ID → <b>404</b>。</div></div>
-
-<div class="card"><h2>④ GraphQL（读写分离验证）</h2>
-<label>查询（Query=读 CRDB）</label>
-<textarea id="gq">{ regionMetrics(tenantId: "ten_1", limit: 3) { region orders gmv } }</textarea>
-<div class="row"><button onclick="gql()">执行 Query</button>
-<button class="ghost" onclick="gq.value='{ __typename }'">preset: typename</button>
-<button class="ghost" onclick="gq.value='mutation { submitAnalysis(query: \\"华东区 GMV 下滑\\", tenantId: \\"ten_a\\") { status } }'">preset: mutation</button></div>
-<pre id="o4">POST /graphql —— 从 ≥1 亿行 orders 表聚合</pre>
-<div class="hint">预期 regionMetrics 返回真实聚合（华东/华北…）。大表聚合首次可能 10s+，属正常。</div></div>
-
-<div class="card full"><h2>请求日志</h2><pre id="log" style="max-height:200px">（空）</pre></div>
-</main>
-<script>
-const B=document.getElementById('base');B.value=location.origin;
-function log(m){const L=document.getElementById('log');L.textContent=`[${new Date().toLocaleTimeString()}] ${m}\\n`+L.textContent}
-async function call(path, opt){const t0=performance.now();try{const r=await fetch(B.value+path,opt);const j=await r.text();const ms=(performance.now()-t0).toFixed(0);log(`${opt?.method||'GET'} ${path} → ${r.status} (${ms}ms)`);return {code:r.status,body:j,ms}}catch(e){log(`${path} → NET-ERR ${e}`);return {code:0,body:'网络错误：'+e,ms:0}}}
-function show(id,res){document.getElementById(id).textContent=`HTTP ${res.code} (${res.ms}ms)\\n`+(res.code===0?res.body:(()=>{try{return JSON.stringify(JSON.parse(res.body),null,2)}catch(e){return res.body}})());
- const el=document.getElementById(id);el.classList.remove('ok','err','warn');el.classList.add(res.code>=200&&res.code<300?'ok':res.code===429||res.code===409?'warn':'err')}
-async function get(p,o){show(o,await call(p))}
-async function submit(a){const body={query:document.getElementById('q').value,tenant_id:document.getElementById('tenant').value,user_id:document.getElementById('user').value,async_:a};
- const ik=document.getElementById('idem').value.trim();if(ik)body.idempotency_key=ik;
- const res=await call('/v1/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});show('o2',res);
- try{const j=JSON.parse(res.body);if(j.run&&j.run.run_id)document.getElementById('rid').value=j.run.run_id}catch(e){}}
-async function gql(){const res=await call('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:document.getElementById('gq').value})});show('o4',res)}
-</script></body></html>"""
-
-
-@get("/", media_type="text/html")
-async def console_root() -> Response:
-    return Response(content=CONSOLE_HTML, media_type="text/html")
-
-
-@get("/console", media_type="text/html")
-async def console_page() -> Response:
-    return Response(content=CONSOLE_HTML, media_type="text/html")
-
-
-def _with_graphql(routes):
-    if _gql_handler is not None:
-        return [*routes, _gql_handler]
-    return routes
-
+jwt_auth = AUTH.build_jwt_auth(exclude_paths=PUBLIC)
 
 app = Litestar(
-    route_handlers=_with_graphql([console_root, console_page, healthz, readyz, create_analysis, get_task, metrics]),
-    dependencies={"app_state": Provide(get_state)},
+    route_handlers=_handlers,
+    dependencies={"app_state": Provide(get_state, sync_to_thread=False)},
     exception_handlers={500: _on_exc},
+    middleware=[jwt_auth.middleware],
     openapi_config=None,
 )
+
+# 启动引导（尽力而为：用户表/租户/指标/路由表+种子）
+try:
+    AUTH.try_bootstrap_users()
+    ADM.try_bootstrap()
+except Exception:  # noqa: BLE001
+    pass
