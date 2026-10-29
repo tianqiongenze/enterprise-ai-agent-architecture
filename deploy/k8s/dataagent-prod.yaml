@@ -30,15 +30,18 @@ spec:
       labels: {app: dataagent-api}
     spec:
       containers:
-        - name: api
-          image: 10.100.135.132:5000/dataagent/api:0.2.0
-          command: ["granian", "--interface", "asgi", "--host", "0.0.0.0", "--port", "8000",
-                    "--workers", "2", "--loop", "auto", "services.api.asgi:app"]
-          envFrom:
-            - configMapRef: {name: dataagent-config}
-          ports: [{containerPort: 8000, name: http}]
-          readinessProbe: {httpGet: {path: /readyz, port: http}, initialDelaySeconds: 5, periodSeconds: 10}
-          livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 12, periodSeconds: 15}
+          - name: api
+            image: 10.100.135.132:5000/dataagent/api:0.2.0
+            command: ["granian", "--interface", "asgi", "--host", "0.0.0.0", "--port", "8000",
+                      "--workers", "2", "--loop", "auto", "services.api.asgi:app"]
+            envFrom:
+              - configMapRef: {name: dataagent-config}
+            ports: [{containerPort: 8000, name: http}]
+            readinessProbe: {httpGet: {path: /readyz, port: http}, initialDelaySeconds: 5, periodSeconds: 10}
+            livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 12, periodSeconds: 15}
+            resources:
+              requests: {cpu: "1", memory: 1Gi}
+              limits: {cpu: "2", memory: 2Gi}
 ---
 apiVersion: v1
 kind: Service

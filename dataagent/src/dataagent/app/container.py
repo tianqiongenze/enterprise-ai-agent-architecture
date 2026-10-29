@@ -14,6 +14,7 @@ import os
 
 from ..adapters.llm.fake_client import FakeLlmClient
 from ..contracts.model import ModelCapability
+from ..contracts.runtime import ApprovalTimeoutPolicy
 from ..infra.context.assembler import (
     ContextAssembler,
     ContextContract,
@@ -32,7 +33,9 @@ from ..infra.memory.memory import (
     default_memory_validate,
 )
 from ..infra.metrics.eval_ops import BatchEvalRunner, RegressionGate
+from ..infra.observability import JsonlRecorder, LogNotificationSink
 from ..infra.runtime.harness import AutonomyBudget, Harness, StopCondition, Verifier
+from ..infra.runtime.lease import LeaseRegistry
 from ..infra.runtime.workflow import (
     DurableWorkflowExecutor,
     HumanApprovalGate,
@@ -72,12 +75,16 @@ class DataAgentContainer:
 
         # ---- 上下文 (第六篇) ----
         self.ctx = ContextAssembler(token_budget=6000)
+        # 注意：容器级 Provider 是租户无关知识，必须显式 tenant_id="*" ——
+        # 缺省会落到 'default'，在为其他租户装配时被 tenant_mismatch 过滤
+        # （指标口径在非 default 租户的规划步永远缺失，真实缺陷，由讲义实验抽查发现）
         self.ctx.register(ContextProvider(
             "tenant_identity",
             lambda: ContextItem(
                 key="tenant_identity",
                 content="租户身份：零售商家，华东区运营",
                 provenance=Provenance.TENANT_ATTR,
+                tenant_id="*",
             ),
             priority=90,
         ))
@@ -87,6 +94,7 @@ class DataAgentContainer:
                 key="metric_registry",
                 content="核心指标：GMV=已支付订单金额合计；订单数；客单价=GMV/单量；转化率；退款率",
                 provenance=Provenance.BUSINESS_KNOWLEDGE,
+                tenant_id="*",
             ),
             priority=80,
         )
@@ -105,9 +113,25 @@ class DataAgentContainer:
 
         # ---- Runtime / Workflow (第五篇) ----
         self.run_store = InMemoryRunStore()
-        self.approval_port = InMemoryApprovalPort(auto_approve=True)
+        # GAP-19a：审批超时运营链路（env 显式启用；缺省 None=演示语义不变）
+        _timeout_policy = None
+        if os.getenv("DATAAGENT_APPROVAL_TIMEOUT", "").lower() in ("1", "true", "yes", "on"):
+            _timeout_policy = ApprovalTimeoutPolicy(
+                pending_ttl_s=float(os.getenv("DATAAGENT_APPROVAL_TTL_S", "300")),
+                escalate_after_s=float(os.getenv("DATAAGENT_APPROVAL_ESCALATE_S", "60")),
+                escalation_chain=tuple(
+                    r.strip() for r in os.getenv(
+                        "DATAAGENT_APPROVAL_ESCALATION_CHAIN",
+                        "approver,secondary_approver,sec_admin").split(",") if r.strip()),
+            )
+        self.approval_port = InMemoryApprovalPort(auto_approve=True,
+                                                  timeout_policy=_timeout_policy,
+                                                  sink=LogNotificationSink())  # GAP-19a: 升级/过期通知（默认 log，生产换邮件/IM sink）
         self.approval = HumanApprovalGate(self.approval_port)
         self.idem = IdempotencyStore()
+        # GAP-18：观测持久化（env 启用则事件流/检查点落 JSONL；缺省不落盘）
+        _obs_dir = os.getenv("DATAAGENT_OBSERV_DIR", "")
+        self.recorder = JsonlRecorder(_obs_dir) if _obs_dir else None
         self.harness = Harness(
             self.executor,
             self.tools,
@@ -122,6 +146,7 @@ class DataAgentContainer:
             idem=self.idem,
             harness_runner=lambda run, ctx: self.harness.run(run, "ten_a"),
             approval_mode=os.getenv("DATAAGENT_APPROVAL_MODE", "auto"),
+            recorder=self.recorder,  # GAP-18: 事件流持久化接线
         )
 
         # ---- Security (第二/七篇) ----

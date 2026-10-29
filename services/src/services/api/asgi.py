@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import time
 import traceback as _tb
 from typing import Any, Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "dataagent", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+# 部署约定（deploy/Dockerfile）：`pip install ./services ./dataagent`，
+# 或以 PYTHONPATH 指向两个 src 目录启动 granian services.api.asgi:app。
+# 此处不再做 sys.path hack —— 模块导入期偷偷改路径会掩盖真实的依赖缺口。
 
 from litestar import Litestar, Request, Response, get, post
 from litestar.di import Provide
@@ -403,6 +403,16 @@ async def approval_resolve(approval_id: str, data: ResolveRequest, request: Requ
 
 
 # ---------------- 任务中心 ----------------
+@post("/v1/admin/approvals/sweep", guards=[guard_domain("approvals")])
+async def approvals_sweep(app_state: AppState) -> dict:
+    """GAP-19a：审批超时巡检（生产定时任务调用同一入口；策略未启用时诚实返回 0）。"""
+    port = app_state.container().approval_port
+    acts = port.sweep_timeouts(run_id=None)
+    return {"swept": len(acts), "details": [
+        {"request_id": r.request_id, "state": st, "action": r.action,
+         "escalated_to": ",".join(r.escalation_history), "run_id": r.run_id} for r, st in acts]}
+
+
 @get("/v1/admin/tasks", guards=[guard_domain("tasks")])
 async def tasks_list(status: str = "", limit: int = 50) -> list:
     return await ADM.tasks_list(status, limit)
@@ -458,14 +468,48 @@ _handlers = [console_root, console_page, login, healthz, readyz, metrics,
              metrics_list, metric_upsert,
              routes_list, route_upsert,
              capability,
-             memory_list, memory_write, memory_delete,
-             approvals_list, approval_get, approval_resolve,
-             tasks_list,
-             release_get, release_save]
+              memory_list, memory_write, memory_delete,
+              approvals_list, approval_get, approval_resolve, approvals_sweep,
+              tasks_list,
+              release_get, release_save]
 if _gql_handler is not None:
     _handlers.append(_gql_handler)
 
 jwt_auth = AUTH.build_jwt_auth(exclude_paths=PUBLIC)
+
+# ---------------- 审批超时定时巡检（GAP-19a 生产化） ----------------
+_SWEEPER_TASK: Optional[Any] = None
+
+
+async def _approval_sweeper_loop(interval_s: float) -> None:
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            port = init_state().container().approval_port
+            if getattr(port, "timeout_policy", None) is None:
+                continue  # 策略未启用：诚实空转
+            acts = port.sweep_timeouts(run_id=None)
+            if acts:
+                print("[approval-sweeper] " + "; ".join(
+                    f"{r.request_id}={st}" for r, st in acts), flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[approval-sweeper] error: {e}", flush=True)
+
+
+async def _startup_sweeper() -> None:
+    global _SWEEPER_TASK
+    if os.getenv("DATAAGENT_APPROVAL_TIMEOUT", "").lower() in ("1", "true", "yes", "on"):
+        interval = float(os.getenv("DATAAGENT_APPROVAL_SWEEP_S", "60"))
+        _SWEEPER_TASK = asyncio.create_task(_approval_sweeper_loop(interval))
+        print(f"[approval-sweeper] started interval={interval}s", flush=True)
+
+
+async def _shutdown_sweeper() -> None:
+    global _SWEEPER_TASK
+    if _SWEEPER_TASK is not None:
+        _SWEEPER_TASK.cancel()
+        _SWEEPER_TASK = None
+
 
 app = Litestar(
     route_handlers=_handlers,
@@ -473,6 +517,8 @@ app = Litestar(
     exception_handlers={500: _on_exc},
     middleware=[jwt_auth.middleware],
     openapi_config=None,
+    on_startup=[_startup_sweeper],
+    on_shutdown=[_shutdown_sweeper],
 )
 
 # 启动引导（尽力而为：用户表/租户/指标/路由表+种子）

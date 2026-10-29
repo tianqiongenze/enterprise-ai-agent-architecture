@@ -45,7 +45,9 @@
 │   └── load/locustfile.py
 ├── scripts/
 │   ├── demo.py                    # 端到端演示
-│   └── gen_chapters.py
+│   ├── gen_chapters.py
+│   ├── validate_chapters.py       # 教学资料五类自检门禁(围栏/索引/结构/反模板/体量)
+│   └── probe_services.py          # 服务层 23 项探针(asgi 模式, CI 友好)
 └── .github/workflows/ci.yml       # CI 回归门禁
 ```
 

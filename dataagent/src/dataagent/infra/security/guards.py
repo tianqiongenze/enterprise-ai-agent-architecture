@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path as _Path
 from typing import Any, Callable, Optional
 
 
@@ -107,8 +108,52 @@ class CredentialBroker:
         self._issued.clear()
 
 
+#: 语料库目录（GAP-12）：中英注入模式 + 清理控制样本，版本化 JSON 数据文件
+_CORPUS_DIR = _Path(__file__).parent / "corpus"
+
+
+def load_injection_patterns(*, with_english: bool = True, with_chinese: bool = True) -> list:
+    """加载中英注入语料库为编译正则；缺文件不报错（回退内置英文，离线可跑）。
+
+    语料是**数据不是代码**：新增模式改 JSON 不动检测器；坏正则跳过（由
+    `validate_chapters`/CI 的语料自检发现），不让一条坏模式瘫痪整个防线。
+    """
+    import json as _json
+    import re as _re
+
+    patterns: list = []
+    for fname, enabled in (("injection_en.json", with_english), ("injection_zh.json", with_chinese)):
+        if not enabled:
+            continue
+        fp = _CORPUS_DIR / fname
+        if not fp.exists():
+            continue
+        try:
+            data = _json.loads(fp.read_text(encoding="utf-8"))
+        except (_json.JSONDecodeError, OSError):
+            continue
+        for spec in data.get("patterns", []):
+            try:
+                patterns.append(_re.compile(spec["regex"]))
+            except _re.error:
+                continue
+    if not patterns:  # 兜底：至少保留内置英文模式
+        patterns.append(_re.compile(
+            r"(?i)\b(ignore|disregard|forget)\b.{0,40}\b(instructions|previous|system|prompt|user)\b"
+        ))
+    return patterns
+
+
 class InjectionGuard:
-    """Prompt 注入防护：分离系统指令与外部数据（信任边界）。"""
+    """Prompt 注入防护：分离系统指令与外部数据（信任边界）。
+
+    GAP-12：检测语料从"内置英文单模式"升级为**中英双语语料库**
+    （corpus/injection_en.json + injection_zh.json）；``patterns`` 可注入，
+    支持整体替换为分类器而不改调用面。
+    """
+
+    def __init__(self, patterns: Optional[list] = None):
+        self.patterns = patterns if patterns is not None else load_injection_patterns()
 
     def sanitize_external(self, text: str) -> str:
         """将不可信外部内容包裹不可信标记，防其伪装成指令。"""
@@ -116,8 +161,4 @@ class InjectionGuard:
         return f"{marker}{text}{marker}"
 
     def is_instruction_leak(self, text: str) -> bool:
-        m = re.search(
-            r"(?i)\b(ignore|disregard|forget)\b.{0,40}\b(instructions|previous|system|prompt|user)\b",
-            text,
-        )
-        return m is not None
+        return any(p.search(text) for p in self.patterns)

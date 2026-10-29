@@ -20,7 +20,8 @@ from litestar.security.jwt import JWTAuth, Token
 
 from services.shared.runtime import Settings
 
-JWT_SECRET = os.getenv("DATAAGENT_JWT_SECRET", "dev-secret-change-in-prod-9f2c")
+# 默认值 ≥32 字节（RFC 7518 对 HS256 的建议长度；探针曾对此发出 InsecureKeyLength 警告）
+JWT_SECRET = os.getenv("DATAAGENT_JWT_SECRET", "dev-secret-change-in-prod-9f2c-offline-0000")
 TOKEN_EXPIRE_SECONDS = int(os.getenv("DATAAGENT_JWT_EXPIRE_S", str(12 * 3600)))
 
 # 角色 → 可访问的管理域（RBAC 矩阵）
@@ -64,6 +65,20 @@ SEED_USERS = [
     {"username": "analyst", "role": "analyst", "full_name": "数据分析师（李分析）", "password": "analyst123"},
 ]
 
+#: 离线模式的内存用户表（无 DSN 时懒加载种子；生产走 CRDB 不经过这里）
+_MEMORY_USERS: dict[str, dict] = {}
+
+
+def _seed_memory_users() -> None:
+    for u in SEED_USERS:
+        _MEMORY_USERS[u["username"]] = {
+            "username": u["username"],
+            "role": u["role"],
+            "full_name": u["full_name"],
+            "password_hash": hash_password(u["password"]),
+            "tenant": "ten_a",
+        }
+
 
 async def ensure_users_table(dsn: str) -> None:
     from dataagent.infra.persistence import cockroach as cr
@@ -85,7 +100,16 @@ async def ensure_users_table(dsn: str) -> None:
 
 
 async def find_user(dsn: str, username: str) -> Optional[dict]:
-    """CRDB 主查 + Redis 镜像兜底（闸门韧性）。"""
+    """CRDB 主查 + Redis 镜像兜底（闸门韧性）；无 DSN 时走内存种子用户（离线模式）。
+
+    离线降级（服务层 mock 化）：`DATAAGENT_DATABASE_URL` 未配置时，用户查找
+    退化为进程内存种子（SEED_USERS）—— 与 InfraProvider"本地离线可跑全部测试，
+    生产自动使用真实中间件"的降级纪律同构。生产（配置了 DSN）路径完全不变。
+    """
+    if not dsn:
+        if not _MEMORY_USERS:
+            _seed_memory_users()
+        return _MEMORY_USERS.get(username)
     from dataagent.infra.persistence import cockroach as cr
     import json as _json
     cli, ok = await cr._redis_fallback()

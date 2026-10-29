@@ -20,3 +20,22 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+# 覆盖率口径（GAP-02，诚实登记）：
+# omit 三个"可选基建适配器"——离线套件无 SDK/DB 不可达，由环境门控 e2e 验证（tests/e2e）：
+#   cockroach.py 需 asyncpg+CRDB；ollama.py 需 ollama SDK；litellm_gateway.py 需 litellm SDK。
+# 这三个模块不计入分母，其余模块（1614 语句）全量参与度量。
+[tool.coverage.run]
+source = ["src/dataagent"]
+omit = [
+    "src/dataagent/adapters/llm/ollama.py",
+    "src/dataagent/adapters/llm/litellm_gateway.py",
+    "src/dataagent/infra/persistence/cockroach.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "@abstractmethod",
+]

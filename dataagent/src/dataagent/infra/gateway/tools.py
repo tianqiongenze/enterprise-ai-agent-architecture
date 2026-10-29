@@ -163,6 +163,11 @@ def build_dataagent_toolchain(
         permission="*",
         requires_approval=True,
         idempotent=True,
+        idempotency_params=("title", "tenant_id"),  # GAP-09: 契约声明制（idempotency_key 是调用方透传字段, 不入键）
+        verifier=lambda res, p: (
+            "" if str(res.value.get("ticket_id", "")).startswith("TK-")
+            else "工单系统回执缺少合法 ticket_id（对账失败）"
+        ),  # GAP-10: 验真钩子
     ))
     reg.register(Tool(
         name="adjust_budget",
@@ -180,5 +185,10 @@ def build_dataagent_toolchain(
         risk_level=RiskLevel.HIGH,
         requires_approval=True,
         idempotent=True,
+        idempotency_params=("region", "amount"),  # GAP-09: 同一区域同一额度的调整才是同一副作用
+        verifier=lambda res, p: (
+            "" if res.value.get("delta") == p.get("amount")
+            else f"回执 delta={res.value.get('delta')} 与请求 amount={p.get('amount')} 不一致（对账失败）"
+        ),  # GAP-10: 验真钩子
     ))
     return reg

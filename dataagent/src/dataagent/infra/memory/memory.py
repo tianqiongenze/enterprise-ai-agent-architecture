@@ -112,25 +112,55 @@ class InMemoryMemoryStore(MemoryStore):
             m for m in self._mem.values()
             if m.active and not m.expired and m.matches_scope(tenant_id, owner)
         ]
-        # 简单关键词召回（真实为向量 Top-K）
+        # 简单关键词召回（真实为向量 Top-K）。相关性阈值：score=0 的候选不返回 ——
+        # 与向量召回的"相似度阈值"同构，防"零分匹配也进窗"的召回洪泛（第 34 课 Badcase）。
         scored = []
         for m in res:
             score = 0
             for tok in re.split(r"\s+", query):
                 if tok and tok.lower() in m.content.lower():
                     score += 1
-            scored.append((score, m))
+            if score > 0:
+                scored.append((score, m))
         scored.sort(key=lambda x: -x[0])
         return [m for _, m in scored[:limit]]
 
 
-MEMORY_DENY_HINTS = ("临时结论", "原始查询结果", "模型推测", "未经验证的")
+#: GAP-12：DENY 词表语料化（infra/security/corpus/memory_deny.json）。
+#: 语料是数据不是代码 —— 新增拒绝词改 JSON 不动校验器；文件缺失/损坏回退内置四词。
+_DenySource = type("_DenySource", (), {"path": None})
+_BUILTIN_DENY_HINTS = ("临时结论", "原始查询结果", "模型推测", "未经验证的")
+
+
+def set_deny_corpus_path(path) -> None:
+    """注入 DENY 语料路径（生产挂配置中心/测试隔离）；None 恢复默认。"""
+    _DenySource.path = path
+
+
+def load_deny_hints() -> list[str]:
+    from pathlib import Path
+
+    import json as _json
+
+    cand = _DenySource.path
+    if cand is None:
+        cand = (Path(__file__).resolve().parents[1]
+                / "security" / "corpus" / "memory_deny.json")
+    try:
+        data = _json.loads(Path(cand).read_text(encoding="utf-8"))
+        hints = [h for h in data.get("hints", []) if isinstance(h, str) and h]
+        return hints or list(_BUILTIN_DENY_HINTS)
+    except Exception:  # noqa: BLE001  缺文件/坏 JSON → 回退内置（防线不因语料故障消失）
+        return list(_BUILTIN_DENY_HINTS)
+
+
+MEMORY_DENY_HINTS = load_deny_hints()  # 模块加载快照（兼容既有引用方）
 
 
 def default_memory_validate(content: str) -> tuple[bool, str]:
-    """Memory 写入校验：拒绝临时结论 / 原始查询 / 模型推测。"""
+    """Memory 写入校验：拒绝临时结论 / 原始查询 / 模型推测（词表语料驱动，每次热读）。"""
 
-    for hint in MEMORY_DENY_HINTS:
+    for hint in load_deny_hints():
         if hint in content:
             return False, f"禁止写入: 包含'{hint}'"
     if len(content) < 4:
@@ -229,10 +259,20 @@ class MemoryRecall:
 
 
 class MemoryOps:
-    """MemoryOps：查看 / 解释 / 修正 / 删除传播 / 防投毒 / 多租户。"""
+    """MemoryOps：查看 / 解释 / 修正 / 删除传播 / 防投毒 / 多租户。
 
-    def __init__(self, store: MemoryStore):
+    删除传播（GAP-08）：删除不再是"主库一删了事"——三站传播（主库/向量索引/
+    缓存下游）经可插拔 sink 执行并留传播日志。M0 内置 MemorySink（内存站），
+    生产注入 VectorIndexSink / CacheInvalidationSink 等真实实现。
+    """
+
+    #: 传播站语义顺序：主库 → 索引 → 缓存/下游（缺任何一站 = 遗忘权承诺是假的）
+    DEFAULT_STATIONS: tuple[str, ...] = ("primary_store", "vector_index", "cache_downstream")
+
+    def __init__(self, store: MemoryStore, sinks: Optional[dict[str, Callable[[Memory], bool]]] = None):
         self.store = store
+        # station 名 → 删除执行函数(memory) -> bool（False = 该站失败，将记录在传播日志）
+        self.sinks: dict[str, Callable[[Memory], bool]] = sinks or {}
 
     def explain(self, memory_id: str, tenant_id: str) -> Optional[dict]:
         m = self.store.get(memory_id)
@@ -250,7 +290,80 @@ class MemoryOps:
             "created_at": m.created_at,
         }
 
-    def delete_with_propagation(self, memory_id: str, tenant_id: str) -> bool:
-        removed = self.store.delete(memory_id, tenant_id)
-        # 真实实现：删除主库后，还要从向量索引/缓存/下游系统移除（删除传播）
-        return removed
+    def delete_with_propagation(self, memory_id: str, tenant_id: str) -> dict:
+        """三站删除传播：返回传播日志（每站状态），主库失败则不传播下游。
+
+        幂等语义：重复删除返回 failed_station 含 primary_store 的 not_found——
+        与旧 bool 返回兼容（主库结果 = log["primary_store"]）。
+        """
+        log: dict[str, str] = {}
+        mem = self.store.get(memory_id)
+        if mem is None or mem.tenant_id != tenant_id:
+            log["primary_store"] = "not_found_or_cross_tenant"
+            return {"memory_id": memory_id, "stations": log, "ok": False}
+        primary_ok = self.store.delete(memory_id, tenant_id)
+        log["primary_store"] = "deleted" if primary_ok else "failed"
+        if primary_ok:
+            for station in self.DEFAULT_STATIONS[1:]:
+                sink = self.sinks.get(station)
+                if sink is None:
+                    # 未注入真实 sink 时显式记录 pending —— 不假装传播已完成
+                    log[station] = "pending(no sink)"
+                    continue
+                try:
+                    log[station] = "propagated" if sink(mem) else "failed"
+                except Exception as e:  # noqa: BLE001
+                    log[station] = f"error: {e}"
+        return {"memory_id": memory_id, "stations": log, "ok": primary_ok}
+
+
+class MemoryRecallEvaluator:
+    """MemoryOps 评测（GAP-05）：召回质量的自动度量。
+
+    回答第八篇遗留的核心缺口——"召回质量没有评测"。判定三件事：
+    - **hit**：期望召回的记忆确实被召回（expected_keys ⊆ 命中键集）；
+    - **leak**：跨租户/越权记忆绝不可出现（forbid_keys ∩ 命中键集 == ∅）；
+    - 汇总为 hit_rate 与 leak 计数，可直接接入 RegressionGate 的判定。
+
+    用法与 Grader 同哲学：期望必须可机器判定，"感觉召回不错"不是评测。
+    """
+
+    def __init__(self, store: MemoryStore):
+        self._recall = MemoryRecall(store)
+
+    def evaluate(self, cases: list[dict]) -> dict:
+        """case 形态：{query, tenant_id, owner, expect_keys: [...], forbid_keys: [...]}。
+
+        expect/forbid 均可选；两者全空的 case 无判定意义，直接计 0 分。
+        """
+        cases = list(cases)
+        total = len(cases) or 1
+        hit = 0
+        leak = 0
+        details: list[dict] = []
+        for c in cases:
+            hits, filtered = self._recall.recall(
+                c.get("query", ""), tenant_id=c.get("tenant_id", "default"),
+                owner=c.get("owner", ""), limit=c.get("limit", 5),
+            )
+            keys = {m.key for m in hits}
+            expected = set(c.get("expect_keys", []))
+            forbidden = set(c.get("forbid_keys", []))
+            case_hit = bool(expected) and expected <= keys
+            case_leak = bool(forbidden & keys)
+            hit += 1 if case_hit else 0
+            leak += 1 if case_leak else 0
+            details.append({
+                "query": c.get("query", ""), "hit": case_hit, "leak": case_leak,
+                "got": sorted(keys),
+                "missed": sorted(expected - keys),
+                "violated": sorted(forbidden & keys),
+                "filtered_reasons": [r for _, r in filtered],
+            })
+        return {
+            "cases": len(cases),
+            "hit_rate": round(hit / total, 3),
+            "cross_tenant_leak": leak,
+            "passed": hit == len(cases) and leak == 0 and len(cases) > 0,
+            "details": details,
+        }

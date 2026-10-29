@@ -15,8 +15,8 @@ spec:
         - name: api
           image: dataagent/api:0.2.0
           imagePullPolicy: IfNotPresent
-          command: ["granian", "--interface", "asgi", "-b", "0.0.0.0:8000",
-                    "--workers", "2", "--threads", "8", "--loop", "rloop", "--http2",
+          command: ["granian", "--interface", "asgi", "--host", "0.0.0.0", "--port", "8000",
+                    "--workers", "2", "--threads", "8", "--loop", "rloop",
                     "--respawn", "--lifetime", "3600", "services.api.asgi:app"]
           ports: [{containerPort: 8000, name: http}]
           envFrom:
@@ -39,20 +39,23 @@ spec:
 #   endpoints:
 #     - {path: /metrics, port: http, interval: 15s}
 ---
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: dataagent-api-hpa
-  namespace: dataagent
-spec:
-  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dataagent-api}
-  minReplicas: 10
-  maxReplicas: 200
-  metrics:
-    - type: Resource
-      resource: {name: cpu, target: {type: Utilization, averageUtilization: 60}}
-    - type: Resource
-      resource: {name: memory, target: {type: Utilization, averageUtilization: 70}}
+# HPA 显式停用（docs/11 纪律）：内存仓储必须单进程；启用前置条件 =
+# CRDB 持久化仓储 + 分布式队列 + 多副本一致性测试全绿（即 docs/12 GAP-14 worker Redis 后端联调完成）。
+# 启用方法：取消注释并确认上述前置条件（参照工程同样将 KEDA/HPA 保持注释态）。
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: dataagent-api-hpa
+#   namespace: dataagent
+# spec:
+#   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dataagent-api}
+#   minReplicas: 10
+#   maxReplicas: 200
+#   metrics:
+#     - type: Resource
+#       resource: {name: cpu, target: {type: Utilization, averageUtilization: 60}}
+#     - type: Resource
+#       resource: {name: memory, target: {type: Utilization, averageUtilization: 70}}
 ---
 apiVersion: v1
 kind: Service

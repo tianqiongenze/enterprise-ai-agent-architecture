@@ -96,6 +96,24 @@ class TestToolContract:
         res3 = tool.invoke({"n": 5})
         assert res3.status == ToolResultStatus.OK
 
+    def test_bool_rejected_as_number(self):
+        """GAP-04 回归钉住：bool 是 int 子类，必须被 number 校验显式拒绝。
+
+        修复前 True 会通过 number 校验直达 executor —— 契约层类型缺陷，
+        且没有任何测试会去传布尔参数（正是第 28 课登记的"没人测就没人发现"）。
+        """
+        tool = Tool(
+            name="q", description="d",
+            parameters_schema={"type": "object", "properties": {"n": {"type": "number"}}, "required": ["n"]},
+            executor=lambda p: ToolResult.ok(p["n"]),
+            risk_level=RiskLevel.READONLY,
+        )
+        res = tool.invoke({"n": True})
+        assert res.status == ToolResultStatus.VALIDATION_ERROR
+        assert "应为数字" in (res.error or "")
+        res2 = tool.invoke({"n": False})
+        assert res2.status == ToolResultStatus.VALIDATION_ERROR
+
     def test_permission_gate(self):
         tool = Tool(
             name="q", description="d",

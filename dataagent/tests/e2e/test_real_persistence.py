@@ -21,6 +21,8 @@ async def test_crdb_runstore_and_memory_roundtrip():
     rs, ms = await build_crdb_services()
     try:
         r = Run(tenant_id="ten_a", query="E2E: 真实订单洞察")
+        # 状态机纪律：pending 不能直达 succeeded，必须经 running
+        r.status = RunStatus.RUNNING
         r.status = RunStatus.SUCCEEDED
         r.add_step("plan"); r.add_event(EventType.RUN_STARTED)
         await rs.save(r)

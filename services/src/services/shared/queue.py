@@ -24,6 +24,22 @@ _producer = None
 _client = None
 _pulsar_ok: Optional[bool] = None
 
+# memory 后端（GAP-14 探针/离线 worker 端到端用）：进程内 FIFO + nack 头部重投
+_MEMQ: list[dict] = []
+
+
+def _backend() -> str:
+    """显式后端选择：DATAAGENT_QUEUE_BACKEND=memory 强制进程内队列（探针/测试）。
+
+    缺省 ""=自动：Pulsar（若可用）→ Redis 兜底 → False（诚实失败）。
+    memory 后端仅单进程有效——与内存仓储同一条纪律（必须 --workers 1）。
+    """
+    return os.getenv("DATAAGENT_QUEUE_BACKEND", "").strip().lower()
+
+
+def mem_queue_depth() -> int:
+    return len(_MEMQ)
+
 
 def pulsar_available() -> bool:
     global _pulsar_ok
@@ -40,8 +56,11 @@ def pulsar_available() -> bool:
 
 
 def enqueue(task: dict) -> bool:
-    """生产：Pulsar 可用走真实 broker；否则 Redis List。"""
+    """生产：memory（显式）→ Pulsar 可用走真实 broker → Redis List 兜底。"""
     body = json.dumps(task, ensure_ascii=False)
+    if _backend() == "memory":
+        _MEMQ.append(dict(task))
+        return True
     if pulsar_available():
         global _client, _producer
         try:
@@ -121,37 +140,82 @@ class TaskMessage:
 _consumer = None
 
 
+def _dlq_policy(dlq_topic: str, max_redeliver: int):
+    """DLQ 策略三代 API 兼容（GAP-27①：真机联调实证 pulsar-client 3.13 行为）。
+
+    - 3.13+：`pulsar.ConsumerDeadLetterPolicy(...)`（Python 包装类，自带 .policy()，
+      wrapper subscribe 内部调 policy() 转 _pulsar 配置——真机取证确认）；
+    - ≤2.x 旧版：`pulsar.DeadLetterPolicy(...)` 构造器；
+    - 都不在（异常版本）：返回 None（无 DLQ 语义，NACK 重投仍由 broker 默认处理）。
+    """
+    import pulsar
+
+    if hasattr(pulsar, "ConsumerDeadLetterPolicy"):
+        return pulsar.ConsumerDeadLetterPolicy(max_redeliver_count=max_redeliver,
+                                               dead_letter_topic=dlq_topic)
+    if hasattr(pulsar, "DeadLetterPolicy"):
+        return pulsar.DeadLetterPolicy(max_redeliver_count=max_redeliver,
+                                       dead_letter_topic=dlq_topic)
+    return None
+
+
 def consume(timeout_ms: int = 2000) -> Optional[TaskMessage]:
-    """消费一条（同步；Worker 线程调用）。Pulsar 优先（NACK+DLQ），Redis 兜底。"""
+    """消费一条（同步；Worker 线程调用）。memory（显式）→ Pulsar（NACK+DLQ）→ Redis 兜底。"""
     global _client, _consumer
+    if _backend() == "memory":
+        if _MEMQ:
+            task = _MEMQ.pop(0)
+            # ack 已出队即确认；nack = 头部重投（保持原顺序，redelivery 语义）
+            return TaskMessage(task, ack_fn=lambda: None,
+                               nack_fn=lambda: _MEMQ.insert(0, task))
+        time.sleep(0.2)
+        return None
     if pulsar_available():
+        global _consumer
         try:
             import pulsar
             if _client is None:
                 _client = pulsar.Client(URL)
             if _consumer is None:
+                policy = _dlq_policy(DLQ_TOPIC,
+                                     int(os.getenv("DATAAGENT_PULSAR_MAX_REDELIVER", "3")))
+                kwargs = {}
+                if policy is not None:
+                    kwargs["dead_letter_policy"] = policy
+                    kwargs["negative_ack_redelivery_delay_ms"] = 30000
+                # GAP-34 缓解（第十轮）：订阅起点可配——共享集群话题会被极速回收重建，
+                # 新订阅默认 Latest 会错过重建前的消息；Earliest 让 worker 重挂后
+                # 能追回积压（环境未禁回收时的自愈手段）。
+                pos = os.getenv("DATAAGENT_PULSAR_INITIAL_POSITION", "").strip().lower()
+                if pos == "earliest":
+                    kwargs["initial_position"] = pulsar.InitialPosition.Earliest
                 _consumer = _client.subscribe(
                     TOPIC, SUBSCRIPTION,
-                    consumer_type=pulsar.ConsumerType.Shared,
-                    dead_letter_policy=pulsar.DeadLetterPolicy(
-                        max_redeliver_count=int(os.getenv("DATAAGENT_PULSAR_MAX_REDELIVER", "3")),
-                        dead_letter_topic=DLQ_TOPIC),
-                    negative_ack_redelivery_delay_ms=30000,
-                )
+                    consumer_type=pulsar.ConsumerType.Shared, **kwargs)
             msg = _consumer.receive(timeout_millis=timeout_ms)
             task = json.loads(msg.data().decode("utf-8"))
+            # GAP-29（真机联调发现）：ack_fn 必须闭包绑定当前 message——
+            # 直接传 _consumer.acknowledge 会在 ack() 零参调用时缺实参（真机 TypeError 取证）
             return TaskMessage(
                 task,
-                ack_fn=_consumer.acknowledge,
-                nack_fn=_consumer.negative_acknowledge,
+                ack_fn=lambda m=msg: _consumer.acknowledge(m),
+                nack_fn=lambda m=msg: _consumer.negative_acknowledge(m),
             )
-        except Exception:  # noqa: BLE001  broker 异常 → 兜底 Redis
-            pass
+        except Exception:  # noqa: BLE001
+            # GAP-32（真机联调发现）：话题可能被回收/重建——订阅失败必须**重置消费者**，
+            # 让下一次 consume 重新 subscribe（自动重挂到重建后的话题），否则本进程会
+            # 永久退化进 redis 空轮询、再也不回到 Pulsar（真机取证的双 Worker 假死根因）。
+            _consumer = None
     cli = _redis()
     if cli is None:
         time.sleep(0.2)
         return None
-    item = cli.brpop(["dataagent:queue:jobs"], timeout=max(1, timeout_ms // 1000))
+    try:
+        # GAP-28（真机联调发现）：socket_timeout=3 < brpop timeout 会抛
+        # redis.TimeoutError —— 必须兜住（队列暂时不可达 = 诚实空轮询，不是故障上抛）
+        item = cli.brpop(["dataagent:queue:jobs"], timeout=max(1, min(timeout_ms // 1000, 2)))
+    except Exception:  # noqa: BLE001  TimeoutError/ConnectionError → 空轮询
+        return None
     if not item:
         return None
     _, body = item

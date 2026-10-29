@@ -1,0 +1,13 @@
+{"name": "dataagent-core-v2", "version": "2.0.0", "changelog": ["v2: 三类失败终态反例（预算耗尽/审批拒绝/Verifier 失败）+ v1 全量正例"], "cases": [
+ {"input": "华东区本月 GMV 下滑原因诊断", "expect": {"expect_status": "succeeded", "min_events": 5}, "meta": {"tenant": "ten_a", "kind": "positive"}},
+ {"input": "华南区订单量分析", "expect": {"expect_status": "succeeded", "min_events": 5}, "meta": {"tenant": "ten_a", "kind": "positive"}},
+ {"input": "ten_b 退款率异常分析", "expect": {"expect_status": "succeeded", "min_events": 5}, "meta": {"tenant": "ten_a", "kind": "positive"}},
+ {"input": "华北区客单价趋势", "expect": {"expect_status": "succeeded", "min_events": 5}, "meta": {"tenant": "ten_a", "kind": "positive"}},
+ {"input": "华东区本月 GMV 下滑原因诊断", "expect": {"expect_status": "succeeded", "min_events": 5}, "meta": {"tenant": "ten_b", "kind": "positive"}},
+ {"input": "华南区订单量分析", "expect": {"expect_status": "succeeded", "min_events": 5}, "meta": {"tenant": "ten_b", "kind": "positive"}},
+ {"input": "ten_b 退款率异常分析", "expect": {"expect_status": "succeeded", "min_events": 5}, "meta": {"tenant": "ten_b", "kind": "positive"}},
+ {"input": "华北区客单价趋势", "expect": {"expect_status": "succeeded", "min_events": 5}, "meta": {"tenant": "ten_b", "kind": "positive"}},
+ {"input": "预算耗尽场景（max_steps=0）", "expect": {"terminal": "failed_budget"}, "meta": {"kind": "negative"}},
+ {"input": "审批拒绝场景（adjust_budget rejected）", "expect": {"terminal": "canceled_rejected"}, "meta": {"kind": "negative"}},
+ {"input": "Verifier 失败场景（结论缺少证据链）", "expect": {"terminal": "failed_verifier"}, "meta": {"kind": "negative"}}
+]}

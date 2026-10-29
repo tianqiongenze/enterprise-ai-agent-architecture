@@ -16,9 +16,17 @@ spec:
           image: dataagent/worker:0.2.0
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "services.worker.main"]
+          env:
+            # 显式 env（第八轮真机修正，与现场 Deployment 对齐——消除本地清单漂移）
+            - {name: DATAAGENT_DATABASE_URL, value: "postgresql://root@cockroachdb.infra.svc.cluster.local:26257/dataagent"}
+            - {name: DATAAGENT_REDIS_FALLBACK, value: "redis://dataagent-redis.dataagent-prod.svc.cluster.local:6379/0"}
+            - {name: DATAAGENT_APPROVAL_MODE, value: "manual"}
+            - {name: DATAAGENT_USE_PULSAR, value: "true"}
+            - {name: DATAAGENT_PULSAR_URL, value: "pulsar://pulsar-broker.infra.svc:6650"}
           envFrom:
             - configMapRef: {name: dataagent-config}
-            - secretRef: {name: dataagent-secrets}
+            - secretRef: {name: dataagent-secrets}  # GAP-31（真机取证）：DSN 在 Secret——
+              # 缺 secretRef 时 DATAAGENT_DATABASE_URL 为空，CRDB 持久化被 _try 静默关闭
           resources:
             requests: {cpu: "1", memory: 1Gi}
             limits: {cpu: "2", memory: 2Gi}

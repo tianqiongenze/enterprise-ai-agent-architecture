@@ -1,0 +1,39 @@
+# 真实环境联调（第七轮）：dataagent 自建 Redis（GAP-14 Redis 后端的真实落点）
+# 命名空间隔离在 dataagent-prod，不与他方 Redis（dify-plus）混用——参照工程
+# "在自己的命名空间部署自己的依赖"的实践（其 postgres 即此模式）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dataagent-redis
+  namespace: dataagent-prod
+  labels: {app: dataagent, tier: infra, component: redis}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: dataagent-redis}}
+  template:
+    metadata:
+      labels: {app: dataagent-redis}
+    spec:
+      containers:
+        - name: redis
+          image: 10.100.135.132:5000/redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          args: ["--save", "", "--appendonly", "no"]  # 租约/队列态：性能优先，不落盘
+          ports: [{containerPort: 6379, name: redis}]
+          resources:
+            requests: {cpu: "100m", memory: 128Mi}
+            limits: {cpu: "500m", memory: 256Mi}
+          readinessProbe: {tcpSocket: {port: redis}, initialDelaySeconds: 3, periodSeconds: 5}
+          livenessProbe: {tcpSocket: {port: redis}, initialDelaySeconds: 8, periodSeconds: 10}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dataagent-redis
+  namespace: dataagent-prod
+  labels: {app: dataagent, tier: infra, component: redis}
+spec:
+  type: ClusterIP
+  selector: {app: dataagent-redis}
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}

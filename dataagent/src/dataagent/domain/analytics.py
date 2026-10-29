@@ -28,12 +28,74 @@ class Metric:
     aliases: tuple[str, ...] = ()
     dimension: str = "amount"   # amount / count / rate / stock
     refresh_policy: str = "daily"
+    version: str = "1"   # GAP-17: 口径版本（口径变更必须升版本，历史可追溯）
 
     def matches(self, expr: str) -> bool:
         """把自然语言映射回指标（别名解析）。"""
         expr_n = expr.strip().lower().replace(" ", "")
         names = [self.name.lower(), self.display_name_zh] + list(self.aliases)
         return any(n.replace(" ", "").lower() == expr_n for n in names)
+
+
+class MetricAmbiguityError(Exception):
+    """别名歧义（GAP-17）：一个自然语言表达式命中了多个指标。
+
+    歧义必须显式暴露而不是"返回首命中"——把退款率解析成转化率是真实事故，
+    静默取第一个命中等于把歧义埋进所有下游报表。
+    """
+
+    def __init__(self, expr: str, candidates: list[str]):
+        super().__init__(f"表达式 '{expr}' 命中多个指标: {candidates} —— 请用唯一名称")
+        self.expr = expr
+        self.candidates = candidates
+
+
+class InMemoryMetricRegistry:
+    """带版本化与歧义检测的指标注册表（GAP-17 的具体实现）。
+
+    - **版本化**：同名指标可注册多版本，`get(name)` 返回最新版，
+      `get(name, version="1")` 取历史版（口径变更可追溯）；
+    - **歧义检测**：`resolve(expr)` 若命中多个指标 → 抛 `MetricAmbiguityError`；
+    - **口径一致性**：同名同版本重复注册但 formula 不同 → 拒绝（防口径被悄悄改写）。
+    """
+
+    def __init__(self) -> None:
+        self._metrics: dict[str, list[Metric]] = {}  # name -> 版本列表(注册序=版本序)
+
+    def register(self, metric: Metric) -> None:
+        versions = self._metrics.setdefault(metric.name, [])
+        for existing in versions:
+            if existing.version == metric.version:
+                if existing.formula != metric.formula:
+                    raise ValueError(
+                        f"指标 {metric.name}@{metric.version} 口径冲突: "
+                        f"'{existing.formula}' vs '{metric.formula}' —— 口径变更必须升版本"
+                    )
+                return  # 完全相同的重复注册幂等放行
+        versions.append(metric)
+
+    def get(self, name: str, version: Optional[str] = None) -> Optional[Metric]:
+        versions = self._metrics.get(name)
+        if not versions:
+            return None
+        if version is None:
+            return versions[-1]  # 最新版
+        for m in versions:
+            if m.version == version:
+                return m
+        return None
+
+    def all(self) -> list[Metric]:
+        return [m for versions in self._metrics.values() for m in versions]
+
+    def resolve(self, expr: str) -> Metric:
+        """别名/名称解析：唯一命中返回；歧义抛 `MetricAmbiguityError`；未命中 ValueError。"""
+        matched = [m for m in self.all() if m.matches(expr)]
+        if not matched:
+            raise ValueError(f"未注册的指标表达式: {expr}")
+        if len(matched) > 1:
+            raise MetricAmbiguityError(expr, sorted(m.name for m in matched))
+        return matched[0]
 
 
 class MetricRegistry(Protocol):

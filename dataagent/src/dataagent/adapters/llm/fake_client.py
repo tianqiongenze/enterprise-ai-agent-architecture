@@ -38,12 +38,18 @@ class FakeLlmClient(LlmClient):
         fail_error: str = "Simulated upstream failure",
         latency_s: float = 0.0,
         structured_handler: Optional[Any] = None,
+        fail_mode: str = "error",
+        retry_after_s: float = 0.5,
     ):
         self.handler = handler
         self.structured_handler = structured_handler
         self.fail_times = fail_times
         self.fail_error = fail_error
         self.latency_s = latency_s
+        # 故障类型（GAP-13 借鉴：四象限补齐——限流型/超时型）
+        # error: 瞬时 5xx | rate_limit: 429+Retry-After（服务端指示退避）| timeout: 上游挂起后超时
+        self.fail_mode = fail_mode
+        self.retry_after_s = retry_after_s
         self.call_count = 0
 
     def complete(
@@ -63,6 +69,13 @@ class FakeLlmClient(LlmClient):
             time.sleep(self.latency_s)
         if self.fail_times > 0:
             self.fail_times -= 1
+            if self.fail_mode == "rate_limit":
+                raise LlmError(
+                    "429 rate limited (server-directed backoff)",
+                    retryable=True, retry_after_s=self.retry_after_s,
+                )
+            if self.fail_mode == "timeout":
+                raise LlmError("upstream timeout after hang", retryable=True)
             raise LlmError(self.fail_error, retryable=True)
 
         usage = Usage(

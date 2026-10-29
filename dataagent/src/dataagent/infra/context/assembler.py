@@ -21,6 +21,23 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Protocol
 
+from ..security.guards import InjectionGuard
+
+#: 模块级注入防护器（GAP-07：信任分级接入硬过滤的执行件）
+_INJECTION_GUARD = InjectionGuard()
+
+
+def default_token_estimator(text: str) -> int:
+    """中文感知 token 估算（GAP-13）。
+
+    旧口径 ``len(text)//4`` 对中文低估 2-4 倍（1 汉字 ≈ 1~2 token，而非 0.25）。
+    新口径：CJK 字符按 1 token 计，其余按 4 字符 1 token 计——对英文与旧口径一致，
+    对中文显著更接近真实 tokenizer。仍为估算：生产可注入真实 tokenizer（可插拔）。
+    """
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    other = len(text) - cjk
+    return max(1, cjk + (other + 3) // 4)
+
 
 class Provenance(str, Enum):
     SYSTEM_RULE = "system_rule"
@@ -101,13 +118,14 @@ def simple_provider(key, content, **kw):
 
 
 class ContextAssembler:
-    """动态上下文装配管线：硬过滤 → 预算分区 → 排序 → 裁剪 → 充分性检查。"""
+    """动态上下文装配管线：硬过滤 → 信任接线 → 预算分区 → 排序 → 裁剪 → 充分性检查。"""
 
     def __init__(
         self,
         *,
         token_budget: int = 6000,
         budget_partitions: Optional[dict[str, int]] = None,
+        token_estimator: Optional[Callable[[str], int]] = None,
     ):
         self.token_budget = token_budget
         # 分区：provenance 类别 -> token 上限
@@ -119,6 +137,8 @@ class ContextAssembler:
             "tool_result": 1500,
             "memory": 700,
         }
+        # token 估算可插拔（GAP-13）：默认中文感知估算，生产可注入真实 tokenizer
+        self._estimate_fn = token_estimator or default_token_estimator
         self.providers: list[ContextProvider] = []
 
     def register(self, provider: ContextProvider) -> None:
@@ -149,6 +169,15 @@ class ContextAssembler:
                 if it.role_mask and not (set(it.role_mask) & roles):
                     slice_.filtered.append((it.key, "role_mismatch"))
                     continue
+                # 信任分级接线（GAP-07）：UNTRUSTED 内容fail-closed 处置——
+                # 注入语料直接拦截；其余自动消毒包裹（把信任边界写成文本结构）
+                if it.trust is TrustLevel.UNTRUSTED:
+                    if _INJECTION_GUARD.is_instruction_leak(it.content):
+                        slice_.filtered.append((it.key, "instruction_leak_blocked"))
+                        continue
+                    it = dataclasses.replace(
+                        it, content=_INJECTION_GUARD.sanitize_external(it.content)
+                    )
                 if hard_filter is not None:
                     ok, reason = hard_filter(it)
                     if not ok:
@@ -191,7 +220,7 @@ class ContextAssembler:
         return slice_
 
     def _estimate(self, it: ContextItem) -> int:
-        return max(1, len(it.key) + len(it.content)) // 4
+        return self._estimate_fn(it.key + it.content)
 
 
 class ContextContract:

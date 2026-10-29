@@ -87,8 +87,14 @@ class TestMemoryOps:
         mid = list(store._mem.keys())[0]
         info = ops.explain(mid, "ten_a")
         assert info["key"] == "pref"
-        assert ops.delete_with_propagation(mid, "ten_a") is True
+        result = ops.delete_with_propagation(mid, "ten_a")
+        assert result["ok"] is True
+        assert result["stations"]["primary_store"] == "deleted"
+        assert result["stations"]["vector_index"] == "pending(no sink)"  # 未注入 sink 显式 pending, 不假装传播完成
         assert ops.explain(mid, "ten_a") is None  # 已失效
+        # 幂等: 重复删除 → not_found, 不再传播
+        again = ops.delete_with_propagation(mid, "ten_a")
+        assert again["ok"] is False and "not_found" in again["stations"]["primary_store"]
 
 
 class TestPoisoning:

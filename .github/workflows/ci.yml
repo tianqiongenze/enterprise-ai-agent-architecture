@@ -2,9 +2,9 @@ name: CI — DataAgent 连续回归门禁 (Regression Gate)
 
 on:
   push:
-    paths: ["dataagent/**"]
+    paths: ["dataagent/**", "services/**", "scripts/**", "chapters/**"]
   pull_request:
-    paths: ["dataagent/**"]
+    paths: ["dataagent/**", "services/**", "scripts/**", "chapters/**"]
 
 jobs:
   test:
@@ -30,3 +30,54 @@ jobs:
         working-directory: dataagent
         run: |
           PYTHONPATH=src python -m dataagent "华东区本月 GMV 下滑原因诊断"
+
+  chapters-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 教学资料六类门禁（围栏/语法/结构/体量/索引/反模板）
+        run: |
+          python scripts/validate_chapters.py
+      - name: 架构依赖方向自检（R-ARCH-01）
+        run: |
+          python scripts/validate_arch.py
+      - name: 部署清单校验（Dockerfile/k8s/helm 硬约束）
+        run: |
+          python scripts/validate_deploy.py
+
+  services-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # 探针用离线降级（无 CRDB/Redis 依赖）；端口随机化防并发冲突
+      DATAAGENT_APPROVAL_MODE: auto
+      PROBE_PORT: 18999
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖（内核 + 服务层 + 探针）
+        run: |
+          pip install -r dataagent/requirements.txt
+          pip install -r services/requirements.txt
+          pip install litestar httpx pyjwt granian pytest
+
+      - name: 服务层探针（asgi 模式，23 项）
+        run: |
+          python scripts/probe_services.py --mode asgi
+
+      - name: 服务层探针（http 部署态模式，真实 granian 子进程 + 进程树清理）
+        run: |
+          python scripts/probe_services.py --mode http --port $PROBE_PORT
+
+      - name: Worker 端到端探针（入队→租约→执行→释放）
+        env:
+          DATAAGENT_QUEUE_BACKEND: memory
+          DATAAGENT_APPROVAL_MODE: auto
+        run: |
+          python scripts/probe_worker.py

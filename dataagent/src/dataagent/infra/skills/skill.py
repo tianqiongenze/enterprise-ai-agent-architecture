@@ -89,3 +89,32 @@ def build_anomaly_skill(registry: SkillRegistry, strict_evidence: bool = True) -
     )
     registry.register(skill)
     return skill
+
+
+def skill_regression(skill: Skill, cases: list[tuple[dict, bool]]) -> dict:
+    """Skill 版本效果回归（GAP-16）：验证器行为随版本变化必须被度量。
+
+    cases 形态： ``(context, expect_valid)`` —— 给定上下文，验证器应该放行还是拒绝。
+    任何一条不符 → ``regressed=True``：Skill 版本升级前必须清零，否则
+    "固化的经验"悄悄变了而无人知晓（第 30 课遗留的兑现）。
+    """
+    passed = 0
+    details: list[dict] = []
+    for ctx, expect_valid in cases:
+        ok, msg = skill.validate(ctx)
+        good = ok == expect_valid
+        passed += 1 if good else 0
+        details.append({
+            "expect_valid": expect_valid, "actual_valid": ok,
+            "reason": msg, "pass": good,
+        })
+    total = len(cases)
+    return {
+        "skill": skill.name,
+        "version": skill.version,
+        "passed": passed,
+        "total": total,
+        "pass_rate": round(passed / total, 3) if total else 0.0,
+        "regressed": passed != total,
+        "details": details,
+    }

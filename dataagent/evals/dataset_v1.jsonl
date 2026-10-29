@@ -1,0 +1,108 @@
+{
+ "name": "dataagent-core",
+ "version": "1.0.0",
+ "changelog": [
+  "v1: 任务×租户 覆盖矩阵 + 1 反例"
+ ],
+ "cases": [
+  {
+   "input": "华东区本月 GMV 下滑原因诊断",
+   "expect": {
+    "expect_status": "succeeded",
+    "min_events": 5
+   },
+   "meta": {
+    "tenant": "ten_a",
+    "kind": "positive"
+   }
+  },
+  {
+   "input": "华东区本月 GMV 下滑原因诊断",
+   "expect": {
+    "expect_status": "succeeded",
+    "min_events": 5
+   },
+   "meta": {
+    "tenant": "ten_b",
+    "kind": "positive"
+   }
+  },
+  {
+   "input": "华南区订单量分析",
+   "expect": {
+    "expect_status": "succeeded",
+    "min_events": 5
+   },
+   "meta": {
+    "tenant": "ten_a",
+    "kind": "positive"
+   }
+  },
+  {
+   "input": "华南区订单量分析",
+   "expect": {
+    "expect_status": "succeeded",
+    "min_events": 5
+   },
+   "meta": {
+    "tenant": "ten_b",
+    "kind": "positive"
+   }
+  },
+  {
+   "input": "ten_b 退款率异常分析",
+   "expect": {
+    "expect_status": "succeeded",
+    "min_events": 5
+   },
+   "meta": {
+    "tenant": "ten_a",
+    "kind": "positive"
+   }
+  },
+  {
+   "input": "ten_b 退款率异常分析",
+   "expect": {
+    "expect_status": "succeeded",
+    "min_events": 5
+   },
+   "meta": {
+    "tenant": "ten_b",
+    "kind": "positive"
+   }
+  },
+  {
+   "input": "华北区客单价趋势",
+   "expect": {
+    "expect_status": "succeeded",
+    "min_events": 5
+   },
+   "meta": {
+    "tenant": "ten_a",
+    "kind": "positive"
+   }
+  },
+  {
+   "input": "华北区客单价趋势",
+   "expect": {
+    "expect_status": "succeeded",
+    "min_events": 5
+   },
+   "meta": {
+    "tenant": "ten_b",
+    "kind": "positive"
+   }
+  },
+  {
+   "input": "复购率预测（未注册指标）",
+   "expect": {
+    "expect_status": "succeeded",
+    "meta_only": "unregistered_metric"
+   },
+   "meta": {
+    "tenant": "ten_a",
+    "kind": "negative"
+   }
+  }
+ ]
+}

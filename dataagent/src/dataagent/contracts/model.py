@@ -13,7 +13,7 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Callable, Iterable, Optional, Protocol, Sequence
+from typing import Any, Callable, ClassVar, Iterable, Optional, Protocol, Sequence
 
 
 class Role(str, Enum):
@@ -54,6 +54,27 @@ class ModelCapability:
     cost_per_1k_output: float = 0.0
     latency_p50_ms: float = 0.0
     provider: str = "mock"
+
+    #: 能力名 → 契约属性（能力硬过滤 GAP-06 的判定表）
+    _CAPABILITY_ATTRS: ClassVar[dict[str, str]] = {
+        "tool_calling": "supports_tool_calling",
+        "structured_output": "supports_structured_output",
+        "streaming": "supports_streaming",
+        "reasoning": "supports_reasoning",
+    }
+
+    def supports(self, capability: str) -> bool:
+        """按能力名判定是否支持（硬过滤判定入口）。
+
+        未知能力名直接抛错（fail-fast）——拼写错误静默返回 False 会让
+        候选链"看起来健康"地全部被排除。
+        """
+        attr = ModelCapability._CAPABILITY_ATTRS.get(capability)
+        if attr is None:
+            raise ValueError(
+                f"未知能力名: {capability}（可用: {sorted(ModelCapability._CAPABILITY_ATTRS)}）"
+            )
+        return bool(getattr(self, attr))
 
 
 class CallStatus(str, Enum):

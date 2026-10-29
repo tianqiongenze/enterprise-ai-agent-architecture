@@ -21,10 +21,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from services.shared import queue as q
 from dataagent.infra.persistence import cockroach as cr
+from dataagent.infra.runtime.lease import LeaseRegistry
 
 DSN = os.getenv("DATAAGENT_DATABASE_URL", "")
 APPROVAL_MODE = os.getenv("DATAAGENT_APPROVAL_MODE", "manual")
 MAX_ATTEMPTS = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
+
+# GAP-14 生产接线（ADR-018）：领取任务前先拿租约——
+# ack 成功 → release（正常流转）；nack → 不 release，租约自然过期供其他 Worker 接管。
+# 内存租约簿仅本进程有效；生产把 LeaseRegistry 换成 Redis/CRDB 后端（协议不变）。
+# GAP-33：WORKER_ID 必须跨 pod 唯一——容器内 pid 恒为 1，{hostname}-{pid}
+# 才能区分双 Worker（真机取证：双 pod 同名 worker-1 导致跨 pod 租约冲突）。
+import socket as _socket
+
+WORKER_ID = os.getenv("WORKER_ID") or f"worker-{_socket.gethostname()}-{os.getpid()}"
+_LEASES = LeaseRegistry(default_lease_s=float(os.getenv("WORKER_LEASE_S", "300")))
 
 
 async def save_task(task: dict) -> None:
@@ -132,24 +143,68 @@ async def resume_after_approval(approval: dict) -> str:
     return task["status"]
 
 
+def run_once(timeout_ms: int = 2000) -> Optional[str]:
+    """消费并处理一条任务（GAP-14 探针/测试入口）。无任务返回 None，有任务返回终态。"""
+    msg = q.consume(timeout_ms=timeout_ms)
+    if msg is None:
+        return None
+    task = msg.task
+    task_id = task.get("request_id") or task.get("task_id") or f"anon-{time.time()}"
+    try:
+        _LEASES.acquire(task_id, WORKER_ID)
+    except PermissionError as e:
+        print(f"[worker] 租约冲突 {task_id}: {str(e)[:100]}", flush=True)
+        msg.nack()
+        return "lease_conflict"
+    try:
+        final = asyncio.run(process(task))
+        if final in ("succeeded", "waiting_approval"):
+            msg.ack()
+            _LEASES.release(task_id, WORKER_ID)  # 正常流转（ADR-018）
+            return final
+        raise RuntimeError(f"task ended {final}")
+    except Exception as e:  # noqa: BLE001
+        # nack 且不 release：租约自然过期 → 其他 Worker 可接管（ADR-018）
+        msg.nack()
+        print(f"[worker] run_once 失败 {task_id}: {str(e)[:120]}", flush=True)
+        raise
+
+
 def main() -> int:
-    print(f"[worker] start approval_mode={APPROVAL_MODE} pulsar={q.pulsar_available()}", flush=True)
+    once = "--once" in sys.argv
+    print(f"[worker] start id={WORKER_ID} approval_mode={APPROVAL_MODE} "
+          f"pulsar={q.pulsar_available()} backend={q._backend() or 'auto'} "
+          f"once={once} lease_s={_LEASES.default_lease_s}", flush=True)
     try:
         asyncio.run(cr.ensure_task_tables(DSN))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print("[worker] ensure tables:", str(e)[:100], flush=True)
     while True:
         msg = q.consume(timeout_ms=2000)
         if msg is None:
+            if once:
+                print("[worker] --once: 队列空，退出", flush=True)
+                return 0
             continue
         task = msg.task
         attempts = int(task.get("_attempts", 0))
+        task_id = task.get("request_id") or task.get("task_id") or f"anon-{time.time()}"
+        try:
+            _LEASES.acquire(task_id, WORKER_ID)
+        except PermissionError as e:
+            print(f"[worker] 租约冲突（他人持有，稍后重投）{task_id}: {str(e)[:100]}", flush=True)
+            msg.nack()
+            if once:
+                return 1
+            continue
         try:
             final = asyncio.run(process(task))
             if final in ("waiting_approval",):
                 msg.ack()  # 审批挂起不是失败：确认消息，由审批流恢复
+                _LEASES.release(task_id, WORKER_ID)
             elif final == "succeeded":
                 msg.ack()
+                _LEASES.release(task_id, WORKER_ID)
             else:
                 raise RuntimeError(f"task ended {final}")
         except Exception as e:  # noqa: BLE001
@@ -161,9 +216,13 @@ def main() -> int:
                 task["error"] = str(e)[:200]
                 asyncio.run(save_task(task))
                 msg.ack()  # 毒丸：终态落库后确认（Pulsar 侧同时有 DLQ 兜底）
+                _LEASES.release(task_id, WORKER_ID)
             else:
                 task["_attempts"] = attempts
-                msg.nack()
+                msg.nack()  # 不 release：租约自然过期 → 其他 Worker 可接管（ADR-018）
+        if once:
+            print(f"[worker] --once: 处理完成 {task_id} → {task.get('status')}", flush=True)
+            return 0
 
 
 if __name__ == "__main__":

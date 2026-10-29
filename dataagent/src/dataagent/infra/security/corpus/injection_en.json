@@ -1,0 +1,14 @@
+{
+  "version": "1",
+  "patterns": [
+    {"name": "ignore_instructions_en", "regex": "(?i)\\b(ignore|disregard|forget)\\b.{0,40}\\b(instructions|previous|system|prompt|user)\\b"},
+    {"name": "reveal_prompt_en", "regex": "(?i)\\b(reveal|print|show|output)\\b.{0,30}\\b(system prompt|your instructions|hidden rules)\\b"},
+    {"name": "role_override_en", "regex": "(?i)\\byou are now\\b.{0,40}\\b(dan|developer|admin|root|unrestricted)\\b"},
+    {"name": "override_safety_en", "regex": "(?i)\\b(bypass|disable|override)\\b.{0,30}\\b(safety|guardrails?|filters?)\\b"}
+  ],
+  "clean_samples": [
+    "What is the GMV trend for East China region?",
+    "Please summarize the report instructions we agreed last week.",
+    "The user asked me to ignore the noise in the raw data and recompute averages."
+  ]
+}
