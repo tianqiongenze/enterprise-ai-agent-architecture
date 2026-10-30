@@ -220,7 +220,11 @@ async def create_analysis(request: Request, data: AnalysisRequest, app_state: Ap
         from services.shared import queue as q
         task = {"kind": "analysis", "query": data.query, "tenant_id": data.tenant_id,
                 "user_id": data.user_id, "request_id": ctx.request_id}
-        q.enqueue(task)
+        # GAP-35（真机 E2E 发现）：enqueue 失败必须显式 503——
+        # 忽略返回值会"假装已排队"，任务永远停在 queued 无人消费
+        if not q.enqueue(task):
+            raise HTTPException(status_code=503,
+                                detail="queue_unavailable：队列通道不可达，请稍后重试")
         try:  # 任务表立即可见（queued）；CRDB 尽力 + 必写镜像
             from dataagent.infra.persistence import cockroach as cr
             rec = {**task, "task_id": ctx.request_id, "status": "queued"}

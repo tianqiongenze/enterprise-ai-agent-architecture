@@ -56,11 +56,23 @@ def pulsar_available() -> bool:
 
 
 def enqueue(task: dict) -> bool:
-    """生产：memory（显式）→ Pulsar 可用走真实 broker → Redis List 兜底。"""
+    """生产：显式后端（memory/redis）短路 → Pulsar 可用走真实 broker → Redis List 兜底。
+
+    GAP-35（真机 E2E 实证）：enqueue 与 consume 的后端选择必须**对称**——
+    QUEUE_BACKEND=redis 时若 enqueue 仍探测 Pulsar，消息会写进会被极速回收的
+    话题，而消费端在 redis 兜底等待 → 通道断裂、任务永久 queued。
+    显式 backend 是单一事实源：设了就两端同时短路。
+    """
     body = json.dumps(task, ensure_ascii=False)
     if _backend() == "memory":
         _MEMQ.append(dict(task))
         return True
+    if _backend() == "redis":
+        cli = _redis()
+        if cli is not None:
+            cli.lpush("dataagent:queue:jobs", body)
+            return True
+        return False  # 显式 redis 但不可达：诚实失败（fail-fast 优于假入队）
     if pulsar_available():
         global _client, _producer
         try:
@@ -160,8 +172,23 @@ def _dlq_policy(dlq_topic: str, max_redeliver: int):
 
 
 def consume(timeout_ms: int = 2000) -> Optional[TaskMessage]:
-    """消费一条（同步；Worker 线程调用）。memory（显式）→ Pulsar（NACK+DLQ）→ Redis 兜底。"""
+    """消费一条（同步；Worker 线程调用）。显式后端（memory/redis）短路 → Pulsar → Redis 兜底。"""
     global _client, _consumer
+    if _backend() == "redis":
+        cli = _redis()
+        if cli is None:
+            time.sleep(0.2)
+            return None
+        try:
+            item = cli.brpop(["dataagent:queue:jobs"], timeout=max(1, min(timeout_ms // 1000, 2)))
+        except Exception:  # noqa: BLE001  GAP-28：TimeoutError/ConnectionError → 空轮询
+            return None
+        if not item:
+            return None
+        _, body = item
+        task = json.loads(body)
+        return TaskMessage(task, ack_fn=lambda: None,
+                           nack_fn=lambda: cli.lpush("dataagent:queue:jobs", body))
     if _backend() == "memory":
         if _MEMQ:
             task = _MEMQ.pop(0)
