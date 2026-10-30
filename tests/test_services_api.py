@@ -54,7 +54,10 @@ class TestAnalysisEndpoint:
             # auto 模式=succeeded；manual 审批模式=waiting_approval（均为正确行为）
             assert body["status"] in ("succeeded", "waiting_approval")
 
-    def test_async_queued(self):
+    def test_async_queued(self, monkeypatch):
+        # GAP-35 修复后：队列不可达时 enqueue 返回 False → API 503（不再假 queued）。
+        # 本测试验证"正常入队"路径，故显式切 memory 后端（离线确定性）。
+        monkeypatch.setenv("DATAAGENT_QUEUE_BACKEND", "memory")
         with client() as c:
             H = auth_headers(c)
             r = c.post("/v1/analysis", headers=H, json={"query": "华东区 GMV 下滑原因", "async_": True})
