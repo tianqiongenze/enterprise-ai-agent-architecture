@@ -1,5 +1,9 @@
 # 07 AI Coding 之法：SDD 把概率生成转化为确定性交付
 
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=155 -->
+
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=155 -->
+
 > **本课定位**：本课讲"法"——规格驱动开发（SDD, Specification-Driven Development）的完整循环：**Spec → Contract → Test → Code**。核心洞察：AI 时代交付质量的决定因素从"编码能力"前移到"规格能力"——规格写得越可判定，AI 候选的验收越机械。本课用本仓库**真实发生的一次重构**（状态机严格化）做全程示范。
 > **教学目标**：①能复述 SDD 四步循环与可执行规格三要件；②能用本仓库状态机规格做判据/反例/例外三段验证；③能解释"规格严格化必须预期翻旧账"的实录依据；④能为一个新行为写出可执行规格。
 > **前置**：第 06 课（三观）

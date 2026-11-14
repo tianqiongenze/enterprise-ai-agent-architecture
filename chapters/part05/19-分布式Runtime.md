@@ -1,5 +1,9 @@
 # 19 从单进程到分布式 Runtime
 
+<!-- acceptance: sections=10 code=2 mermaid=1 lines>=175 -->
+
+<!-- acceptance: sections=10 code=2 mermaid=1 lines>=175 -->
+
 > **本课定位**：本课讲第 15 课预留的"迁移缝"如何被真实填上：`TaskQueue`/`Worker` 端口的生产化实现（`services/shared/queue.py` 的 Pulsar 优先/Redis 兜底 + NACK 重试 + DLQ），以及 Worker 消费落库的真实链路。学完本课，你能解释"为什么 M0 内存版必须单进程"，并跑通服务层的队列语义验证。
 > **教学目标**：①能复述队列四语义与 Pulsar/Redis 对应；②能演示内存仓储多进程状态分裂；③能解释"至少一次投递+幂等消费"组合；④能按三级台阶规划多进程解除路径。
 > **前置**：第 15 课（选型）、第 18 课（Durable Workflow）

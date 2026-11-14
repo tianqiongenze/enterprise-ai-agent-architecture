@@ -1,5 +1,9 @@
 # 11 从散落调用到 LLM Runtime：建立稳定执行入口
 
+<!-- acceptance: sections=10 code=6 mermaid=1 lines>=155 -->
+
+<!-- acceptance: sections=10 code=6 mermaid=1 lines>=155 -->
+
 > **本课定位**：本课讲第四篇的开篇命题：为什么模型调用必须收口到 Runtime？核心论证：散落调用 = 路由/重试/成本/审计四处失控；Runtime = **一个入口 + 四个分层**（Registry 路由执行观测）。学完本课，你能识别散落调用的六种症状，并理解本仓库 `llm_runtime.py` 的分层设计。
 > **教学目标**：①能说出散落调用的六种症状与 Runtime 四层结构；②能演示注册/别名/路由决策；③能解释"换模型 diff=0"的验收判据；④能识别封装缺失的真实缺陷案例。
 > **前置**：第 01 课（LogicalCall/Attempt）

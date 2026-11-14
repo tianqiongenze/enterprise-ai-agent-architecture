@@ -1,5 +1,9 @@
 # 18 用 Durable Workflow 收口自主分析：检查点、审批与幂等
 
+<!-- acceptance: sections=10 code=4 mermaid=1 lines>=215 -->
+
+<!-- acceptance: sections=10 code=4 mermaid=1 lines>=215 -->
+
 > **本课定位**：本课讲 `DurableWorkflowExecutor` 的三大支柱：**检查点恢复**（断点续跑）、**人工审批**（HITL interrupt/resume）、**副作用幂等**（重试不重复）。学完本课，你能手工完成一次"审批中断 → 决议 → 恢复"的完整演练，并解释每个支柱拦住的现实事故。
 > **教学目标**：①能手工完成 interrupt→决议→resume 全流程；②能解释幂等 try_mark 的原子性；③能区分审批中断与故障的异常分流；④能说明拒绝路径的双层语义（step 成功/run 取消）。
 > **前置**：第 17 课（执行模型）

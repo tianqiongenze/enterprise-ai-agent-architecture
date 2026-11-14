@@ -1,5 +1,9 @@
 # 21 从 Prompt 拼接到 Context Runtime
 
+<!-- acceptance: sections=10 code=6 mermaid=1 lines>=170 -->
+
+<!-- acceptance: sections=10 code=6 mermaid=1 lines>=170 -->
+
 > **本课定位**：第六篇开篇。本课论证一个关键升级：上下文不是"拼字符串"，而是**带 Schema 的数据**（来源/可信度/权限/生命周期/预算）。学完本课，你能解释 `ContextItem` 十个字段各自的治理意义，并跑通"一条上下文的一生"实验。
 > **教学目标**：①能说出拼接三宗罪与 Schema 十字段的对治；②能跑通一条上下文从供给到进窗/被滤的完整生命周期；③能解释 frozen 与 expired 派生属性的治理意义；④能读懂 decision_trace 的四个计数。
 > **前置**：第 05 课（CE 层）

@@ -1,5 +1,9 @@
 # 26 Context Security 与 ContextOps
 
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=140 -->
+
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=140 -->
+
 > **本课定位**：第六篇收口。本课把前五课的机制收拢为两个运营视角：**Security**（信任分级接入硬过滤、注入防护纵深、敏感信息治理）与 **Ops**（决策追踪、装配监控、预算告警）。学完本课，你能为一个运行中的上下文管线设计安全基线与运营看板。
 > **教学目标**：①能复述安全基线四条及本仓库落点状态；②能用 hard_filter 钩子接入敏感项拦截；③能设计 filtered 原因分布的运营告警（含 tenant_mismatch=0 基线）；④能说出 S1 遗留的修法。
 > **前置**：第 21-25 课

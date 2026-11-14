@@ -135,6 +135,31 @@ def check_template_reuse(all_texts: dict[Path, str]) -> list[str]:
     return errors
 
 
+ACCEPT_PAT = re.compile(
+    r"<!-- acceptance: sections=(\d+) code=(\d+) mermaid=(\d+) lines>=(\d+) -->")
+
+
+def check_acceptance(text: str, name: str) -> list[str]:
+    """C7 验收锁：讲义声明的结构/代码/图示/体量必须与实际一致（防退化）。"""
+    errs: list[str] = []
+    m = ACCEPT_PAT.search(text)
+    if not m:
+        return [f"缺少验收锁 <!-- acceptance: ... -->（运行 scripts/gen_acceptance.py 生成）"]
+    want = dict(zip(("sections", "code", "mermaid", "lines"), map(int, m.groups())))
+    got = {
+        "sections": len(re.findall(r"^## ", text, re.M)),
+        "code": len(re.findall(r"^```python", text, re.M)),
+        "mermaid": len(re.findall(r"^```mermaid", text, re.M)),
+        "lines": sum(1 for ln in text.splitlines() if ln.strip()),
+    }
+    for k in ("sections", "code", "mermaid"):
+        if got[k] != want[k]:
+            errs.append(f"{k} 实际 {got[k]} ≠ 锁定 {want[k]}（删节？刷新基线需跑 gen_acceptance 并注明原因）")
+    if got["lines"] < want["lines"]:
+        errs.append(f"非空行 {got['lines']} < 锁定下限 {want['lines']}（体量退化）")
+    return errs
+
+
 def check_index_mapping(index: list[tuple[str, str]], files: list[Path]) -> list[str]:
     """C2：索引-文件双向一致。"""
     errors: list[str] = []
@@ -180,6 +205,9 @@ def main() -> int:
         if nonempty < args.min_lines:
             n_size += 1
             problems.append(f"[C5 体量] {rel}: 非空行 {nonempty} < {args.min_lines}（疑似提纲而非手册）")
+        acc_errs = check_acceptance(text, f.name)
+        if acc_errs:
+            problems += [f"[C7 验收锁] {rel}: {e}" for e in acc_errs]
 
     problems += [f"[C2 索引] {e}" for e in check_index_mapping(index, files)]
     problems += [f"[C4 模板] {e}" for e in check_template_reuse(all_texts)]
@@ -196,7 +224,7 @@ def main() -> int:
             f"（围栏 {n_fence} / 语法 {n_py} / 结构 {n_section} / 体量 {n_size} / 索引与模板见上）"
         )
         return 1
-    print("全部通过 ✓（围栏 / 语法 / 结构 / 体量 / 索引 / 反模板）")
+    print("全部通过 ✓（围栏 / 语法 / 结构 / 体量 / 索引 / 反模板 / 验收锁）")
     return 0
 
 

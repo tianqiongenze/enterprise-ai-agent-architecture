@@ -1,5 +1,9 @@
 # 15 Agent Runtime 混合架构选型
 
+<!-- acceptance: sections=10 code=1 mermaid=1 lines>=135 -->
+
+<!-- acceptance: sections=10 code=1 mermaid=1 lines>=135 -->
+
 > **本课定位**：第五篇开篇。本课回答：Runtime 层有哪些候选架构（进程内编排 / Workflow 引擎 / 分布式编排器），DataAgent 为什么选"进程内 Durable Workflow 包 Harness"作为 M0，何时迁移到分布式。学完本课，你能用"选型判定表"为自己的项目做 Runtime 选型并说明理由。
 > **教学目标**：①能用三问判定表完成 Runtime 选型；②能解释"迁移缝"的设计与实证；③能换自定义 RunStore 验证端口可替换性；④能识别四种选型错误姿势。
 > **前置**：第 02 课（范式）、第 10 课（立项）

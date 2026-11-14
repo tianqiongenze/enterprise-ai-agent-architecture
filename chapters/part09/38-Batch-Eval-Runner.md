@@ -1,5 +1,9 @@
 # 38 从"有标准"到"能自动测"：Multi-Grader 与 Batch Runner
 
+<!-- acceptance: sections=10 code=4 mermaid=1 lines>=145 -->
+
+<!-- acceptance: sections=10 code=4 mermaid=1 lines>=145 -->
+
 > **本课定位**：本课讲评测的**规模化执行**：Multi-Grader（多维度并行打分）与 BatchEvalRunner（批量跑 + Scorecard 汇总）。核心命题：单条评测是手工艺术，批量评测才是工程能力——**能自动测、能批量测、能聚合看**。学完本课，你能为 DataAgent 搭一条"多 Grader + 批量 + 记分卡"的评测流水线。
 > **教学目标**：①能搭建多 Grader 批量评测流水线；②能解读 Scorecard/per_case/max_scores 三层输出；③能编写符合纯度要求的自定义 Grader；④能制定"快测管门禁、全量管水位"的执行策略。
 > **前置**：第 36-37 课

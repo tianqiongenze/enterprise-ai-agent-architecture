@@ -1,5 +1,9 @@
 # 29 从 Tool Call 到 Action Runtime：受控副作用六阶段
 
+<!-- acceptance: sections=10 code=2 mermaid=1 lines>=150 -->
+
+<!-- acceptance: sections=10 code=2 mermaid=1 lines>=150 -->
+
 > **本课定位**：本课讲 HIGH 风险工具的执行闭环：**提议→校验→授权→审批→执行→验真**六阶段（本仓库以 human_gate + ApprovalPort + IdempotencyStore 组合实现核心五段），以及"模型只能提议、不能执行"的结构保证。学完本课，你能走通一次受控行动的完整生命周期并解释每个阶段拦住的事故。
 > **教学目标**：①能走通受控行动六阶段生命周期；②能演示手工 HITL 提议→中断→决议→恢复；③能解释模型只能提议的结构证明；④能说出幂等键设计的契约声明制方向。
 > **前置**：第 18 课（审批门）、第 28 课（三层契约）

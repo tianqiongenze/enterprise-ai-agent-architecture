@@ -1,5 +1,9 @@
 # 09 AI Coding 之器：可治理可验证的 AI Coding Harness
 
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=145 -->
+
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=145 -->
+
 > **本课定位**：本课讲"器"——把前四课的道法术固化成**随取随用的工具集**（Harness）。一个合格的 Coding Harness 要回答三个问题：产出怎么验（验收自动化）、纪律怎么守（门禁自动化）、语料怎么养（示例即语料）。本课以本仓库自建的三个"器"为活教材：全量测试门禁、`validate_chapters.py` 资料自检、SDD 规约文档。
 > **教学目标**：①能说出 Coding Harness 的器 1-4 及其对应事故；②能跑通两条验收命令并演示门禁拦截；③能解释围栏检查为何不用数奇偶；④能按"事故驱动"标准为自己的仓库设计器。
 > **前置**：第 08 课（术）

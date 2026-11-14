@@ -1,5 +1,9 @@
 # 27 从 Function Call 到 Capability Architecture
 
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=150 -->
+
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=150 -->
+
 > **本课定位**：第七篇开篇。本课回答能力形态的选型问题：一个业务能力应该以 Tool / Skill / Workflow / SubAgent / MCP 哪种形态存在？核心工具：**形态选型矩阵**（按确定性/副作用/复用面三轴判定）。学完本课，你能为 DataAgent 的五个能力（指标查询/订单查询/沙箱分析/工单创建/预算调整）说出形态选择理由。
 > **教学目标**：①能用三轴判定矩阵做形态选型；②能盘点 DataAgent 五能力的形态与理由；③能演示动态最小工具集的风险过滤；④能识别三种形态错配翻车现场。
 > **前置**：第 03 课（能力模型）

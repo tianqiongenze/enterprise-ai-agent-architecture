@@ -1,5 +1,9 @@
 # 31 MCP 与 CapabilityOps：能力接入协议与运营
 
+<!-- acceptance: sections=10 code=1 mermaid=1 lines>=140 -->
+
+<!-- acceptance: sections=10 code=1 mermaid=1 lines>=140 -->
+
 > **本课定位**：本课是第七篇收口：MCP（Model Context Protocol）作为**外部能力接入协议**的定位，以及 CapabilityOps（能力地图的运营治理：盘点/审计/下线）。核心观点：MCP 解决"怎么接进来"，不解决"进来后怎么治理"——**接入协议与治理体系是两层**。学完本课，你能说出 MCP 与本仓库 Tool 契约的映射关系，并对能力地图做一次运营盘点。
 > **教学目标**：①能说出 MCP 四概念与本地契约的映射；②能完成外部能力接入三步（映射/声明/注册）；③能执行 CapabilityOps 四动作；④能解释接入协议与治理体系的分层关系。
 > **前置**：第 27-30 课

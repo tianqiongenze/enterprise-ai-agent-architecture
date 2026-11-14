@@ -1,5 +1,9 @@
 # 40 从离线提升到安全发布：Regression Gate 与受控发布
 
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=160 -->
+
+<!-- acceptance: sections=10 code=3 mermaid=1 lines>=160 -->
+
 > **本课定位**：第九篇收口。本课讲分数之外的安全发布三道闸：**RegressionGate**（关键维度不得退化）、**ReleaseEVolution**（Canary/Kill Switch/回滚）、以及"平均分上升也不许发布"的反直觉规则。学完本课，你能为本仓库搭建"评测→门禁→灰度→回滚"的发布闭环。
 > **教学目标**：①能配置逐维门禁并演示拦截路径；②能解释"关键维度不可交易"与缺测按 0 处理；③能走通 Canary→KillSwitch→回滚全流程；④能制定五项发布治理清单。
 > **前置**：第 36-39 课

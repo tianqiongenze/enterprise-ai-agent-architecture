@@ -1,5 +1,9 @@
 # 02 Agent 范式：从 Autonomous 到 Workflow 的混合架构
 
+<!-- acceptance: sections=10 code=4 mermaid=2 lines>=180 -->
+
+<!-- acceptance: sections=10 code=4 mermaid=2 lines>=180 -->
+
 > **本课定位**：本课解决"Agent 系统该用什么执行范式"这个第一性问题。核心结论：**Autonomous 与 Workflow 不是二选一，而是分工**——开放性探索交给 Harness（自主循环），确定性治理交给 Workflow（可中断、可审批、可恢复）。学完本课，你能为一个业务任务正确选型执行范式，并理解本仓库 `Harness` 与 `DurableWorkflowExecutor` 的分工边界。
 > **教学目标**：①能为一个业务任务做范式选型并给出理由；②能说出 Harness 三个治理件的作用；③能解释"终态归 Workflow 所有"的纪律及其 Badcase 来源；④能跑通混合范式的端到端轨迹。
 > **前置**：第 01 课（LogicalCall/Attempt 心智模型）

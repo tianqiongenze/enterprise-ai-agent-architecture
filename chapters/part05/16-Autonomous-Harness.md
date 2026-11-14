@@ -1,5 +1,9 @@
 # 16 从 while 循环到 Autonomous Harness
 
+<!-- acceptance: sections=10 code=5 mermaid=1 lines>=175 -->
+
+<!-- acceptance: sections=10 code=5 mermaid=1 lines>=175 -->
+
 > **本课定位**：本课把第五篇第 2 课讲透：裸 while 循环的四种死法，以及 `Harness` 的四件套（预算/验证器/停止条件/事件流）如何逐一救活。学完本课，你能为一个自主任务配置合理的预算参数，并用 Verifier 规则把"完成"钉在可观测事实上。
 > **教学目标**：①能说出裸 while 四种死法与四件套的对应；②能配置预算三参数并解释依据；③能演示验证失败 fail-closed 全链路；④能使用注入时钟做确定性耗时断言。
 > **前置**：第 02 课（范式分工）

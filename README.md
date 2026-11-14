@@ -3,6 +3,28 @@
 > 依据课程大纲（`企业级Agent工程架构大纲.pdf`，共 10 篇 / 42 讲）逐篇逐讲复现的教学资料 + 贯穿项目代码仓库。
 > 全部内容遵循 **SDD（Specification-Driven Development）、TDD（Test-Driven Development）、DDD（Domain-Driven Design）、TOGAF（企业架构框架）** 以及中国软件工程国标（GB/T）的文档与工程治理约定。
 
+## 0. 本次交付做到了什么、没做到什么（诚实表，借参照工程惯例）
+
+| 项 | 状态 |
+| --- | --- |
+| 42 讲教学资料（10 字段实验手册 6924 行 + 42 份深度 PPT 共 3059 页 + 六类资料门禁） | ✅ 已实现 |
+| 内核（LLM Runtime/Harness/Workflow/Context/Memory/Eval/工具三层契约），测试 213+ 例、可达覆盖率 93%（coverage 实测） | ✅ 已实现 |
+| 真实中间件落库：CockroachDB（≥1 亿行 orders）、Redis 集群、Pulsar 优先/Redis 兜底队列、预聚合汇总表 | ✅ 已实现（真机 10.167.2.175/176） |
+| 企业级接入：JWT+RBAC 四角色、B 端控制台 10 页、每租户配额、幂等、限流 | ✅ 已实现（LAN E2E 实测） |
+| 真实审批 HITL：human_gate 中断 → 审批单落库（decided_by/at 审计）→ 恢复/取消 | ✅ 已实现（approve→succeeded / reject→canceled 实测） |
+| 异步任务全生命周期落库（queued→running→waiting_approval→终态）+ 双 Worker + 租约 | ✅ 已实现 |
+| 真机验收与压测：全链路 E2E 7/7、K6 7492req/p95=562ms、Locust 1477req/0 失败（docs/14/15） | ✅ 已实现 |
+| 治理：GAP 台账 36 项（34 关闭/2 移交）、ADR-012~021、docs/00–16 体系化 | ✅ 已实现 |
+| **分支覆盖率口径** | ❌ 未测（coverage line-only，本轮 P2-R7 补） |
+| **Pulsar 客户端直连消费**（Worker 当前经 Redis 兜底通道；镜像内 pulsar-client 换装待办） | ⚠️ 通道已打通，形态待换 |
+| **进程/容器级沙箱隔离**（CPU/内存/文件系统/强制终止） | ❌ 未实现（大纲第 7 篇 Sandbox 的容器形态） |
+| **System 层 Grader（成本/时延）与消融工具** | ❌ 缺（本轮 P2-R8 补） |
+| **生产通知渠道**（企业微信/飞书机器人真实 URL） | ⚠️ Webhook 协议真机 200 已验证，等待真实凭据 |
+| **ruff / mypy 全量接入 CI** | ❌ 未接入（避免范围膨胀，列待办） |
+
+> 台账：`docs/12-对比审计与优化重构记录.md`（GAP-01~36，单一真相源）；
+> 对比审计：`docs/16-对比分析与打分-参照dataagent-course.md`。
+
 ---
 
 ## 仓库结构
