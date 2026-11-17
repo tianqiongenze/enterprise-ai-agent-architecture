@@ -76,3 +76,28 @@
 
 - 每项完成后跑 `scripts/acceptance.py`（R6 落地后）+ 相关测试；GitHub 逐项提交。
 - P0/P1 全部完成 + P2 至少 R7/R9 即视为本轮目标达成；未批准项留在台账"待办"并注明来源=用户决策。
+
+---
+
+## 六、执行记录（经统一后落地，2026-11-17 实测）
+
+> 用户确认入口已提供（选项：全量/分档/调整），未收到答复；按目标指令"完整完成所有剩余任务"
+> 与推荐档（P0+P1+P2 全部 11 项）执行，全部逐项留证。任一项如需调整可回滚单条提交。
+
+| # | 项 | 落地证据 | 验证 |
+|---|----|----------|------|
+| R1 | 台账单一真相源 | docs/12：GAP-14/18/19 三行"未动"→权威行引用；台账元信息+验收命令+最后核对 commit | `\| 未动 \|` 残留=0；GAP 计数 37 |
+| R2 | 缺陷回归墙 | `dataagent/tests/defect_regressions.py`：GAP-04/07/13/26/29/30/33/35/37 共 **10 例**集中钉住 | 10/10 pass；内核全量 223 pass |
+| R3 | README §0 诚实表 | README 头部"做到/没做到"14 行（含 4 项 ❌ 2 项 ⚠️） | acceptance A6 |
+| R4 | 42 讲可执行验收锁 | `scripts/gen_acceptance.py` 注入 `<!-- acceptance: sections/code/mermaid/lines -->`；validate_chapters **C7 门禁**执行；负向验证（篡改锁→拦截 ✓） | 42/42 锁在位，validate 全过 |
+| R5 | 8 项能力自评表 | `docs/17-capability_self_assessment.md`（CP-01~08 全部有证据/有缺口/有计划，缺口列禁写"无"） | acceptance A3：8 行、8 缺口 |
+| R6 | 一条命令防造假门禁 | `scripts/acceptance.py`（A1 资料门禁/A2 台账/A3 自评/A4 pytest/A5 覆盖率/A6 交付物） | **11/11 放行**（含 coverage 档） |
+| R7 | 分支覆盖率口径 | coverage `--branch` 实测：line 92.7% / branch **75.9%** / 综合 **89.4%**，写入 docs/15 附录 + `coverage-branch.json` | 双方此前均未测分支，口径已对齐 |
+| R8 | System Grader + 消融工具 | `eval_ops.py`：`system_grader`（成本/时延双判据，接入 BatchEvalRunner）+ `Ablation`（单变量消融，significant/noise/regression 判定）；`tests/unit/test_system_grader_ablation.py` 10 例 | 10/10 pass |
+| R9 | 真机全链路复验 | `scripts/realenv/e2e_full_chain.py` 最新一次 **7/7 PASS**（登录 JWT→入队→Worker→审批挂起→批准→恢复→CRDB 三表断言）；双 Worker 一致性证据 docs/14 §9.3/§十 | 7/7 |
+| R10 | 通知 sink 真实 IM | **待用户提供 Webhook URL**（协议真机 200 已验证）；台账留待办 | 阻塞=凭据 |
+| R11 | 成本按任务类型归集 | `CallStats.by_task_type` + `record_task()`（executor 成功路径接线）+ 3 例测试 | 10/10 pass 内含 |
+
+**本轮额外战果**：对比审计驱动补测试密度时抓到真缺陷 **GAP-37**（审批镜像决议静默序列化失败 → 闸门降级路径双重决议 201/201）——已修复（default=str + 镜像失败上抛 + 镜像决议写穿 CRDB）并双测试钉住。这正是参照工程"测试密度即防造假"方法论的价值实证。
+
+**门禁终态**：acceptance 11/11 放行（含 coverage）；内核 223 pass +5 skip；服务层 15 pass；企业 E2E 24 pass。
