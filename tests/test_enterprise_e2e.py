@@ -16,7 +16,14 @@ def _env_ready() -> bool:
     return bool(os.getenv("DATAAGENT_DATABASE_URL"))
 
 
-pytestmark = pytest.mark.skipif(not _env_ready(), reason="需要 DATAAGENT_DATABASE_URL/REDIS_FALLBACK")
+pytestmark = [
+    pytest.mark.skipif(not _env_ready(), reason="需要 DATAAGENT_DATABASE_URL/REDIS_FALLBACK"),
+    # 队列后端隔离：套件与部署集群共用 Redis 时，线上 Worker 会抢走测试任务
+    # （实测：任务被 dataagent-worker pod 消费至 succeeded）。memory 后端保证封闭。
+]
+os.environ.setdefault("DATAAGENT_QUEUE_BACKEND", "memory")
+# HITL 用例语义要求 manual 审批模式（auto=自动批准会让 waiting_approval 断言失效）
+os.environ.setdefault("DATAAGENT_APPROVAL_MODE", "manual")
 
 
 @pytest.fixture(scope="module")
@@ -181,15 +188,20 @@ class TestAsyncApprovalE2E:
         assert client.get(f"/v1/tasks/{tid}", headers=admin_h).json()["status"] == "canceled"
 
     def test_resolve_twice_404(self, client, admin_h):
-        aps = client.get("/v1/admin/approvals?status=pending", headers=admin_h).json()
-        if not aps:
-            pytest.skip("无待审批单")
-        aid = aps[0]["approval_id"]
-        client.post(f"/v1/admin/approvals/{aid}/resolve", headers=admin_h,
-                    json={"decision": "approved"})
+        # 自建审批单（不依赖全局 pending 列表——历史遗留单会污染断言）
+        from dataagent.infra.persistence import cockroach as cr
+        rec = asyncio.run(cr.create_approval(
+            os.environ["DATAAGENT_DATABASE_URL"],
+            {"task_id": "req_selftest_2x", "action": "adjust_budget",
+             "params": {"query": "幂等决议", "tenant_id": "ten_a"},
+             "risk_level": "high", "requested_by": "agent:test"}))
+        aid = rec["approval_id"]
+        r1 = client.post(f"/v1/admin/approvals/{aid}/resolve", headers=admin_h,
+                         json={"decision": "approved"})
+        assert r1.status_code == 201
         r2 = client.post(f"/v1/admin/approvals/{aid}/resolve", headers=admin_h,
                          json={"decision": "approved"})
-        assert r2.status_code == 404  # 已决议不可重复
+        assert r2.status_code == 404  # 已决议不可重复（含闸门降级镜像路径写穿后）
 
     def test_queue_enqueue_visible(self, client, admin_h):
         r = client.post("/v1/analysis", headers=admin_h, json={

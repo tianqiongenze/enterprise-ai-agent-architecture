@@ -307,3 +307,65 @@ def fixture_from_run(run: "Run", *, prompt_version: str, context_version: str,
         model=model, prompt_version=prompt_version, context_version=context_version,
         tool_set=tool_set, tenant=run.tenant_id,
     )
+
+# ================= System 层 Grader（GAP-03 尾巴：成本/时延） =================
+def system_grader(*, max_input_tokens: int = 20000,
+                  max_duration_s: float = 60.0, name: str = "system") -> Grader:
+    """System 层评测（GAP-03 收口）：成本（输入 token 预算）与时延（Run 墙钟）双判据。
+
+    与 Outcome/Trajectory 并列构成三层评测（第九篇第 1 课）。
+    score = 满足判据比例（0/0.5/1.0）；passed = 双判据全部满足。
+    返回 Grader 以接入 BatchEvalRunner（与其他 Grader 同构）。
+    """
+    def grade(run: Run, ref: dict) -> GraderResult:
+        ts = [e.ts for e in run.events if getattr(e, "ts", 0)]
+        duration = (max(ts) - min(ts)) if len(ts) >= 2 else 0.0
+        cost_ok = run.budget_used_input <= max_input_tokens
+        latency_ok = duration <= max_duration_s
+        score = (0.5 if cost_ok else 0.0) + (0.5 if latency_ok else 0.0)
+        detail = (f"input_tokens={run.budget_used_input}/{max_input_tokens} "
+                  f"duration={duration:.2f}s/{max_duration_s}s")
+        return GraderResult(name=name, score=score,
+                            passed=cost_ok and latency_ok, detail=detail)
+    return Grader(name, grade, max_score=1.0)
+
+
+# ================= 消融工具（CP-06：单变量对照，借 L1-5 模板形态） =================
+@dataclass
+class AblationCase:
+    """一次消融实验的对照记录。"""
+    variable: str            # 被消融的变量名（如 memory_enabled）
+    arm: str                 # 臂名（如 on / off）
+    score: float             # 该臂综合得分
+    detail: dict = field(default_factory=dict)
+
+
+class Ablation:
+    """单变量消融：同一评测集在"开/关"两臂下各跑一遍，产出对照结论。
+
+    用途：回答"X 机制到底带来多少增量"——没有它，治理结论只是经验拍板
+    （对齐第九篇"Baseline 与 Candidate 公平比较"）。
+    """
+
+    def __init__(self, variable: str):
+        self.variable = variable
+        self.arms: dict[str, AblationCase] = {}
+
+    def run_arm(self, arm: str, runner: Callable[[], float], **detail: Any) -> float:
+        """跑一个臂：runner 返回该臂综合得分（0~1）。"""
+        score = float(runner())
+        self.arms[arm] = AblationCase(variable=self.variable, arm=arm, score=score,
+                                      detail=dict(detail))
+        return score
+
+    def conclusion(self, *, min_delta: float = 0.02) -> dict:
+        """两臂对照结论：on-off ≥ min_delta 才认定机制有增量（防噪声误判）。"""
+        if len(self.arms) < 2:
+            raise ValueError("消融需要至少两个臂（on/off）")
+        on = self.arms.get("on") or next(iter(self.arms.values()))
+        off = self.arms.get("off") or list(self.arms.values())[-1]
+        delta = round(on.score - off.score, 4)
+        verdict = "significant" if delta >= min_delta else ("noise" if abs(delta) < min_delta else "regression")
+        return {"variable": self.variable, "on": on.score, "off": off.score,
+                "delta": delta, "verdict": verdict,
+                "detail": {k: v.detail for k, v in self.arms.items()}}

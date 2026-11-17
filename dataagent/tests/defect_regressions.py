@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -185,3 +186,29 @@ def test_ledger_documents_all_gaps():
     ids = set(re.findall(r"GAP-(\d{2})", text))
     assert len(ids) >= 36, f"台账应覆盖 36 项，实得 {len(ids)}"
     assert "| 未动 |" not in text, "台账不得残留'未动'状态行（单一真相源）"
+
+
+# ---------------- GAP-37 审批镜像决议写穿（CRDB datetime 序列化静默失败） ----------------
+def test_gap37_mirror_resolution_write_through():
+    """镜像决议必须 (1) 能序列化 CRDB 行（datetime） (2) 写穿回权威库。
+
+    真实缺陷链：resolve 走 CRDB → mirror_approval_to_redis(json.dumps(rec))
+    因 created_at/decided_at 是 datetime 抛 TypeError → except 静默吞掉
+    → 镜像仍 pending → 闸门降级路径二次决议放行（201/201）。
+    """
+    from datetime import datetime, timezone
+    from dataagent.infra.persistence import cockroach as cr
+
+    rec = {"approval_id": "apr_reg_dt", "status": "approved", "task_id": "t",
+           "action": "adjust_budget", "params": {"a": 1},
+           "created_at": datetime.now(timezone.utc),      # CRDB RETURNING 形态
+           "decided_at": datetime.now(timezone.utc),      # 同上——旟能 json.dumps 即炸
+           "decided_by": "reg"}
+    assert asyncio.run(cr.mirror_approval_to_redis(rec)) is True, "datetime 行必须可镜像（default=str）"
+
+    async def _roundtrip():
+        cli, ok = await cr._redis_fallback()
+        raw = await cli.get("dataagent:approval:apr_reg_dt")
+        return json.loads(raw)["status"] if raw else None
+
+    assert asyncio.run(_roundtrip()) == "approved", "镜像必须反映决议后状态"

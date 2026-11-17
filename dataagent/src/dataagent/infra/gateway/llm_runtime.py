@@ -61,6 +61,15 @@ class CallStats:
     input_tokens: int = 0
     output_tokens: int = 0
     total_latency_ms: float = 0.0
+    by_task_type: dict = field(default_factory=dict)  # R11: 成本按任务类型归集
+
+    def record_task(self, task_type: str, *, input_tokens: int, output_tokens: int) -> None:
+        """按任务类型归集成本——回答"哪类任务贵"（CP-06 缺口收口）。"""
+        d = self.by_task_type.setdefault(
+            task_type, {"calls": 0, "input_tokens": 0, "output_tokens": 0})
+        d["calls"] += 1
+        d["input_tokens"] += input_tokens
+        d["output_tokens"] += output_tokens
 
     @property
     def estimated_cost(self) -> float:
@@ -242,6 +251,9 @@ class ReliableExecutor:
                     if result.usage:
                         self.stats.input_tokens += result.usage.prompt_tokens
                         self.stats.output_tokens += result.usage.completion_tokens
+                        self.stats.record_task(call.task,
+                                               input_tokens=result.usage.prompt_tokens,
+                                               output_tokens=result.usage.completion_tokens)
                     call.status = CallStatus.SUCCEEDED
                     call.output = result.text
                     call.structured = result.structured

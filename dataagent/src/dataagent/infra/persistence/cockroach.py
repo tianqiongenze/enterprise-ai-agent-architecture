@@ -547,7 +547,7 @@ async def mirror_task_to_redis(task: dict) -> bool:
     try:
         tid = task.get("task_id")
         await cli.set(f"dataagent:task:{tid}",
-                      json.dumps(task, ensure_ascii=False, ex=None) if False else json.dumps(task, ensure_ascii=False), ex=RUN_MIRROR_TTL)
+                      json.dumps(task, ensure_ascii=False, default=str), ex=RUN_MIRROR_TTL)
         await cli.sadd("dataagent:tasks:all", tid)
         return True
     except Exception:  # noqa: BLE001
@@ -590,13 +590,13 @@ async def mirror_approval_to_redis(appr: dict) -> bool:
         return False
     try:
         await cli.set(f"dataagent:approval:{appr.get('approval_id')}",
-                      json.dumps(appr, ensure_ascii=False), ex=RUN_MIRROR_TTL)
+                      json.dumps(appr, ensure_ascii=False, default=str), ex=RUN_MIRROR_TTL)
         await cli.sadd("dataagent:approvals:pending", appr.get("approval_id"))
         if appr.get("status") != "pending":
             await cli.srem("dataagent:approvals:pending", appr.get("approval_id"))
         return True
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception:  # noqa: BLE001  序列化失败也不得静默吞掉——镜像失真即双重决议
+        raise
 
 
 async def create_approval(dsn: str, rec: dict) -> dict:
@@ -645,6 +645,24 @@ async def resolve_approval(dsn: str, approval_id: str, decision: str, by: str) -
         rec["status"] = decision
         rec["decided_by"] = by
         rec["decided_at"] = _t.time()
+        # 写穿（write-through）：闸门降级期间的镜像决议必须回写权威库，
+        # 否则闸门恢复后 CRDB 仍 pending → 二次决议放行（真机 201/201 教训）。
+        try:
+            conn = await _connect_kwargs_from_dsn(dsn, timeout_s=10)
+            try:
+                await conn.execute(f"""
+                INSERT INTO {APPROVALS_TABLE}(approval_id,run_id,task_id,action,params,risk_level,status,requested_by,decided_by,decided_at,created_at)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                ON CONFLICT (approval_id) DO UPDATE SET
+                  status=excluded.status, decided_by=excluded.decided_by, decided_at=excluded.decided_at
+                """, rec.get("approval_id"), rec.get("run_id"), rec.get("task_id"),
+                    rec.get("action"), json.dumps(rec.get("params", {}), ensure_ascii=False),
+                    rec.get("risk_level", "high"), decision,
+                    rec.get("requested_by", "agent"), by, _t.time(), rec.get("created_at", _t.time()))
+            finally:
+                await conn.close()
+        except Exception:  # noqa: BLE001  闸门仍饱和：镜像为准，CRDB 追平留重放
+            pass
     if isinstance(rec.get("params"), str):
         rec["params"] = json.loads(rec.get("params") or "{}")
     await mirror_approval_to_redis(rec)
