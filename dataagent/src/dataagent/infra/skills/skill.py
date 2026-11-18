@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Skill Engineering (第七篇第4课)：把一次成功的经营分析固化为领域能力。
 
 Skill 六层结构：使命边界、领域原则、操作步骤、完成标准、验证器、产物模板。
@@ -7,8 +6,8 @@ Skill 内部由 Tool/Workflow/SubAgent 组合；渐进式加载；Skill Validato
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
 
 
 @dataclass
@@ -23,7 +22,7 @@ class Skill:
     version: str = "1.0.0"
     owner: str = "platform"
     requires: list[str] = field(default_factory=list)      # 依赖的工具/子 Skill
-    validator: Optional[Callable[[dict], tuple[bool, str]]] = None
+    validator: Callable[[dict], tuple[bool, str]] | None = None
     prompt_fragment: str = ""        # 渐进式加载：需要用到时才注入的最小描述
 
     def validate(self, context: dict) -> tuple[bool, str]:
@@ -43,7 +42,7 @@ class SkillRegistry:
     def register(self, skill: Skill) -> None:
         self._skills[skill.name] = skill
 
-    def get(self, name: str) -> Optional[Skill]:
+    def get(self, name: str) -> Skill | None:
         return self._skills.get(name)
 
     def progressive_load(self, task: str) -> list[Skill]:

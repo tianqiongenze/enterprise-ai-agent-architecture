@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 """云端 Python 沙箱 (第七篇第3课 Action Runtime) + 执行隔离。
 
 只读沙箱：对 python_analyze 提供受限统计执行，绝不 eval 任意代码。
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 
 class PythonSandbox:

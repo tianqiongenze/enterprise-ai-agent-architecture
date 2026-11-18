@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Durable Workflow (第五篇第4课)：把自主分析收口到可中断、可审批、可恢复的流程。
 
 Workflow Shell —— 为什么开放分析必须放进 Workflow？因为真实业务需要：
@@ -16,13 +15,13 @@ Workflow 由节点 (Step) 构成的有向图驱动。节点可以是：
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from ...contracts.runtime import (
-    ApprovalPendingError,
-    Action,
     ApprovalDecision,
+    ApprovalPendingError,
     ApprovalPort,
     ApprovalRequest,
     ApprovalStatus,
@@ -47,8 +46,8 @@ class WorkflowError(Exception):
 class WorkflowNode:
     name: str
     kind: str  # task / verifier / human_gate / harness
-    fn: Optional[Callable[[Run, dict[str, Any]], dict[str, Any]]] = None
-    approval_action: Optional[str] = None  # kind=human_gate 时对应的副作用动作
+    fn: Callable[[Run, dict[str, Any]], dict[str, Any]] | None = None
+    approval_action: str | None = None  # kind=human_gate 时对应的副作用动作
     risk_level: str = "low"
     retries: int = 0
     idempotency_params: tuple[str, ...] = ()  # GAP-09: human_gate 声明哪些参数构成幂等键
@@ -114,7 +113,7 @@ class InMemoryRunStore(RunStore):
     def save_checkpoint(self, cp: Checkpoint) -> None:
         self._cps[cp.run_id] = cp
 
-    def load_checkpoint(self, run_id: str) -> Optional[Checkpoint]:
+    def load_checkpoint(self, run_id: str) -> Checkpoint | None:
         return self._cps.get(run_id)
 
 
@@ -122,9 +121,9 @@ class InMemoryApprovalPort(ApprovalPort):
     """内存审批端口：实现"请求→回执→决议"闭环 + 超时升级/过期（GAP-19a）。"""
 
     def __init__(self, auto_approve: bool = False, resolver=None,
-                 *, timeout_policy: Optional[ApprovalTimeoutPolicy] = None,
-                 clock: Optional[Callable[[], float]] = None,
-                 sink: Optional[Any] = None) -> None:
+                 *, timeout_policy: ApprovalTimeoutPolicy | None = None,
+                 clock: Callable[[], float] | None = None,
+                 sink: Any | None = None) -> None:
         self._reqs: dict[str, ApprovalRequest] = {}
         self.auto_approve = auto_approve
         # 超时策略缺省 = 永不超时（M0 演示语义不变，向后兼容）
@@ -150,15 +149,15 @@ class InMemoryApprovalPort(ApprovalPort):
     def get(self, request_id: str) -> ApprovalRequest:
         return self._reqs[request_id]
 
-    def pending_for(self, run_id: str, action: Optional[str] = None) -> list[ApprovalRequest]:
+    def pending_for(self, run_id: str, action: str | None = None) -> list[ApprovalRequest]:
         return [
             r for r in self._reqs.values()
             if r.run_id == run_id and r.status == ApprovalStatus.PENDING.value
             and (action is None or r.action == action)
         ]
 
-    def sweep_timeouts(self, *, run_id: Optional[str] = None,
-                       now: Optional[float] = None) -> list[tuple[ApprovalRequest, str]]:
+    def sweep_timeouts(self, *, run_id: str | None = None,
+                       now: float | None = None) -> list[tuple[ApprovalRequest, str]]:
         """执行超时处置（判定归 policy，副作用归端口），返回 [(req, 处置状态)]。
 
         - expired：pending 超过 TTL → 置 EXPIRED（终态，不可补批准）；
@@ -190,7 +189,7 @@ class InMemoryApprovalPort(ApprovalPort):
                     self.sink.notify(kind, {"request_id": req.request_id, "run_id": req.run_id,
                                             "action": req.action,
                                             "to": ",".join(req.escalation_history)})
-                except Exception as e:  # noqa: BLE001  通知故障不阻断巡检（fail-safe）
+                except Exception as e:
                     print(f"WARN notify 失败(已忽略): {e}")
         return actions
 
@@ -231,7 +230,7 @@ class HumanApprovalGate:
     def sweep_timeouts(self, run_id: str) -> list[tuple[ApprovalRequest, str]]:
         if not self.supports_timeout_sweep():
             return []
-        return self.approval.sweep_timeouts(run_id=run_id)
+        return self.approval.sweep_timeouts(run_id=run_id)  # type: ignore[attr-defined]  # 鸭子类型探测：只有启用了超时策略的 Port 才实现
 
 
 class DurableWorkflowExecutor:
@@ -242,9 +241,9 @@ class DurableWorkflowExecutor:
         store: RunStore,
         approval: HumanApprovalGate,
         idem: IdempotencyStore,
-        harness_runner: Optional[Callable[[Run, dict[str, Any]], Run]] = None,
+        harness_runner: Callable[[Run, dict[str, Any]], Run] | None = None,
         approval_mode: str = "auto",  # auto=演示自动通过 | manual=真实审批(中断-恢复)
-        recorder: Optional[Any] = None,  # GAP-18: 事件流持久化接线（None=不落盘）
+        recorder: Any | None = None,  # GAP-18: 事件流持久化接线（None=不落盘）
     ):
         self.store = store
         self.approval = approval
@@ -262,11 +261,11 @@ class DurableWorkflowExecutor:
             self.recorder.record_run_events(run)
             self.recorder.record_checkpoint(run.to_checkpoint())  # 检查点快照（last-wins）
             self._recorded_len[run.run_id] = len(run.events)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"WARN recorder 落盘失败(不阻断主链路): {e}")
 
     def _execute_gated_action(
-        self, run: Run, step: Step, node: "WorkflowNode", action: str
+        self, run: Run, step: Step, node: WorkflowNode, action: str
     ) -> dict[str, Any]:
         """审批通过后的受控执行（GAP-09 接线）：幂等键先占 → 回执。
 
@@ -287,19 +286,18 @@ class DurableWorkflowExecutor:
         )
         return {"effect_key": effect_key, "idempotent_skip": not first_time, "receipt": receipt}
 
-    def execute(self, wf: WorkflowDefinition, run: Run, pre_approved: Optional[dict[str, Any]] = None) -> Run:
+    def execute(self, wf: WorkflowDefinition, run: Run, pre_approved: dict[str, Any] | None = None) -> Run:
         """执行工作流；若 Run 已有 Checkpoint 则从中恢复（Resume）。
 
         pre_approved: 恢复执行时由上层注入的审批决议（{"action": {"decision": "approved", "by": ...}}），
         实现 HITL 的 interrupt/resume —— 人工审批真实发生后工作流才继续。"""
         cp = self.store.load_checkpoint(run.run_id)
         start_idx = 0
-        executed = set()
+        executed: set[str] = set()
         if cp is not None:
             # Resume：跳过已完成节点
             for idx, (sid, status) in enumerate(cp.step_serial):
                 if status == StepStatus.SUCCEEDED.value:
-                    executed.add(sid)
                     start_idx = idx + 1
             run.restore(cp)
 
@@ -403,7 +401,7 @@ class DurableWorkflowExecutor:
                 self.store.save(run)
                 self.store.save_checkpoint(run.to_checkpoint())
                 raise
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 step.status = StepStatus.FAILED
                 step.error = str(e)
                 step.finished_at = time.time()

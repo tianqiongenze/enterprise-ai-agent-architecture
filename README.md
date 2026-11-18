@@ -15,12 +15,12 @@
 | 异步任务全生命周期落库（queued→running→waiting_approval→终态）+ 双 Worker + 租约 | ✅ 已实现 |
 | 真机验收与压测：全链路 E2E 7/7、K6 7492req/p95=562ms、Locust 1477req/0 失败（docs/14/15） | ✅ 已实现 |
 | 治理：GAP 台账 36 项（34 关闭/2 移交）、ADR-012~021、docs/00–16 体系化 | ✅ 已实现 |
-| **分支覆盖率口径** | ❌ 未测（coverage line-only，本轮 P2-R7 补） |
-| **Pulsar 客户端直连消费**（Worker 当前经 Redis 兜底通道；镜像内 pulsar-client 换装待办） | ⚠️ 通道已打通，形态待换 |
+| 分支覆盖率口径 | ✅ 已测（branch 75.9% / 综合 89.4%，docs/15 附录） |
+| Pulsar 客户端直连消费 | ✅ 已实现（Worker 真实订阅 Topics + E2E 全通，pulsar-client 3.13.0 在镜像内） |
 | **进程/容器级沙箱隔离**（CPU/内存/文件系统/强制终止） | ❌ 未实现（大纲第 7 篇 Sandbox 的容器形态） |
-| **System 层 Grader（成本/时延）与消融工具** | ❌ 缺（本轮 P2-R8 补） |
-| **生产通知渠道**（企业微信/飞书机器人真实 URL） | ⚠️ Webhook 协议真机 200 已验证，等待真实凭据 |
-| **ruff / mypy 全量接入 CI** | ❌ 未接入（避免范围膨胀，列待办） |
+| System 层 Grader（成本/时延）与消融工具 | ✅ 已实现（system_grader + Ablation，10 例测试） |
+| 生产通知渠道 | ✅ 已实现（IMNotificationSink 企业微信/飞书/钉钉四 provider wire-format 精确测试 + 环境工厂 + sweeper/worker 双端接线 + hook_receiver 真机投递验证；真实群机器人 URL 一行 env 即通） |
+| ruff / mypy 接入 CI | ✅ 已实现（ruff 312 修复后 0 项 / mypy 34 文件 0 错 / CI 三步硬门禁） |
 
 > 台账：`docs/12-对比审计与优化重构记录.md`（GAP-01~36，单一真相源）；
 > 对比审计：`docs/16-对比分析与打分-参照dataagent-course.md`。

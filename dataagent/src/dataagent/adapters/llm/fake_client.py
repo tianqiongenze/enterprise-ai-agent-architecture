@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """适配器：Fake/Stub LLM Client（离线可运行、可测试、可注入故障）。
 
 用于课程演示与测试 —— 不依赖任何外部 API，所有用例可离线运行。
@@ -7,7 +6,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from ...contracts.model import (
     CompletionResult,
@@ -32,12 +32,12 @@ class FakeLlmClient(LlmClient):
 
     def __init__(
         self,
-        handler: Optional[Any] = None,
+        handler: Any | None = None,
         *,
         fail_times: int = 0,
         fail_error: str = "Simulated upstream failure",
         latency_s: float = 0.0,
-        structured_handler: Optional[Any] = None,
+        structured_handler: Any | None = None,
         fail_mode: str = "error",
         retry_after_s: float = 0.5,
     ):
@@ -58,9 +58,9 @@ class FakeLlmClient(LlmClient):
         messages: Sequence[Message],
         *,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-        structured: Optional[type] = None,
-        tools: Optional[Sequence[dict[str, Any]]] = None,
+        max_tokens: int | None = None,
+        structured: type | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> CompletionResult:
         from ...infra.gateway.llm_runtime import LlmError
 
@@ -92,7 +92,7 @@ class FakeLlmClient(LlmClient):
                 import json
                 try:
                     args = json.loads(argstr or "{}")
-                except Exception:  # noqa: BLE001
+                except Exception:
                     args = {}
                 tool_calls.append(
                     ToolCall(id=f"tc_{self.call_count}", name=name, arguments=args)
@@ -132,12 +132,12 @@ class FakeLlmClient(LlmClient):
                 spec = m.content[len("结构化:"):]
                 try:
                     return json.loads(spec)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     return {}
         # 尝试用默认 schema 返回含所有 required 字段的空值
         try:
             schema = structured.model_json_schema() if hasattr(structured, "model_json_schema") else {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             schema = {}
         required = schema.get("required", [])
         for r in required:

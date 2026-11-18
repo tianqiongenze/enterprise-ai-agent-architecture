@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """EvalOps (第九篇)：企业级评测与受控进化。
 
 - Eval Contract / 三层评测 (Outcome / Trajectory / System)
@@ -9,10 +8,10 @@
 """
 from __future__ import annotations
 
-import dataclasses
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol
+from typing import Any
 
 from ...contracts.runtime import Run
 
@@ -108,7 +107,7 @@ def high_risk_tool_has_approval(run: Run) -> str:
 
 
 def safety_grader(
-    checks: Optional[list[Callable[[Run], str]]] = None,
+    checks: list[Callable[[Run], str]] | None = None,
     name: str = "safety",
 ) -> Grader:
     """Safety Grader：安全不变式逐条检查，任一违规即 0 分（安全不可交易）。
@@ -150,7 +149,7 @@ class BatchEvalRunner:
     def __init__(self, graders: list[Grader]):
         self.graders = graders
 
-    def evaluate(self, cases: list[tuple[Run, dict]]) -> "EvalReport":
+    def evaluate(self, cases: list[tuple[Run, dict]]) -> EvalReport:
         per_case: list[dict] = []
         totals: dict[str, float] = {}
         max_scores: dict[str, float] = {}
@@ -210,7 +209,7 @@ class ReleaseEVolution:
 
     def __init__(self):
         self.canary_pct: float = 0.0
-        self.canary_criteria: Optional[dict[str, float]] = None
+        self.canary_criteria: dict[str, float] | None = None
         self.kill_switch = False
         self.released: list[dict[str, Any]] = []   # {"version", "fingerprint", "released_at"}
 
@@ -218,12 +217,12 @@ class ReleaseEVolution:
     def released_versions(self) -> list[str]:
         return [r["version"] for r in self.released]
 
-    def canary(self, percent: float, criteria: Optional[dict[str, float]] = None) -> None:
+    def canary(self, percent: float, criteria: dict[str, float] | None = None) -> None:
         """开灰度：比例 + 观察判据（缺省无判据 = 只放量不自动停，诚实显式）。"""
         self.canary_pct = percent
         self.canary_criteria = criteria
 
-    def observe(self, report: "EvalReport") -> dict:
+    def observe(self, report: EvalReport) -> dict:
         """灰度观察：按判据校验当前报表，不达标自动触发 kill_switch。"""
         if not self.canary_criteria:
             return {"healthy": True, "violations": [], "action": "no_criteria"}
@@ -237,7 +236,7 @@ class ReleaseEVolution:
             return {"healthy": False, "violations": violations, "action": "killed"}
         return {"healthy": True, "violations": [], "action": "continued"}
 
-    def promote(self, version: str, *, fingerprint: Optional[str] = None) -> bool:
+    def promote(self, version: str, *, fingerprint: str | None = None) -> bool:
         """晋升发布：绑定 Fixture 指纹（归因链）；紧急态下拒绝。"""
         if self.kill_switch:
             return False
@@ -274,14 +273,14 @@ class Dataset:
     否则基线漂移（"分数变了不知道是谁变的"的第一源头）。
     """
 
-    def __init__(self, cases: Optional[list[dict]] = None, *, name: str = "default",
-                 version: str = "1.0.0", changelog: Optional[list[str]] = None):
+    def __init__(self, cases: list[dict] | None = None, *, name: str = "default",
+                 version: str = "1.0.0", changelog: list[str] | None = None):
         self.cases = list(cases or [])
         self.name = name
         self.version = version
         self.changelog = list(changelog or [])
 
-    def save(self, path: "Any") -> None:
+    def save(self, path: Any) -> None:
         import json
         payload = {"name": self.name, "version": self.version,
                    "changelog": self.changelog, "cases": self.cases}
@@ -289,18 +288,18 @@ class Dataset:
             f.write(json.dumps(payload, ensure_ascii=False, indent=1))
 
     @classmethod
-    def load(cls, path: "Any") -> "Dataset":
+    def load(cls, path: Any) -> Dataset:
         import json
         with open(path, encoding="utf-8") as f:
             payload = json.load(f)
         return cls(payload.get("cases", []), name=payload.get("name", "default"),
                    version=payload.get("version", "?"), changelog=payload.get("changelog", []))
 
-    def add(self, input: str, expect: dict, meta: Optional[dict] = None) -> None:
+    def add(self, input: str, expect: dict, meta: dict | None = None) -> None:
         self.cases.append({"input": input, "expect": expect, "meta": meta or {}})
 
 
-def fixture_from_run(run: "Run", *, prompt_version: str, context_version: str,
+def fixture_from_run(run: Run, *, prompt_version: str, context_version: str,
                      tool_set: str, model: str = "fake-llm") -> dict:
     """从 Run 自动采集 Fixture 五元组（GAP-15：消除手工填写的漂移源）。"""
     return snapshot_fixture(

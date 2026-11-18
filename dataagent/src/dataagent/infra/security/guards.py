@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """安全与权限 (第二/四/七/八篇治理)：多租户数据权限、QueryGateway、凭据、防注入。
 
 - 多租户行列级数据权限：在查询网关层注入行/列过滤，防止跨租户泄漏
@@ -8,10 +7,10 @@
 """
 from __future__ import annotations
 
-import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path as _Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 
 @dataclass
@@ -39,8 +38,8 @@ class TenancyContext:
     tenant_id: str
     user_id: str
     roles: set[str]
-    row_filter: Optional[dict[str, str]] = None
-    col_filter: Optional[tuple[str, ...]] = None
+    row_filter: dict[str, str] | None = None
+    col_filter: tuple[str, ...] | None = None
 
 
 class QueryGateway:
@@ -152,7 +151,7 @@ class InjectionGuard:
     支持整体替换为分类器而不改调用面。
     """
 
-    def __init__(self, patterns: Optional[list] = None):
+    def __init__(self, patterns: list | None = None):
         self.patterns = patterns if patterns is not None else load_injection_patterns()
 
     def sanitize_external(self, text: str) -> str:

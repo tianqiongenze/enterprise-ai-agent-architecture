@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """DataAgent 工具链 (第七篇) —— 企业级只读工具 + 有副作用工具。
 
 将"指标查询、经营数据查询、Python 分析、报告生成"封装为企业级只读工具，
@@ -8,14 +7,12 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Optional
 
 from ...contracts.tool import (
     CapabilityRegistry,
     RiskLevel,
     Tool,
     ToolResult,
-    ToolResultStatus,
 )
 
 
@@ -58,7 +55,7 @@ class TenantDataLake:
 
 def build_dataagent_toolchain(
     lake: TenantDataLake,
-    registry: Optional[CapabilityRegistry] = None,
+    registry: CapabilityRegistry | None = None,
 ) -> CapabilityRegistry:
     """装配 DataAgent 的全部工具能力地图。"""
     reg = registry or CapabilityRegistry()
@@ -77,7 +74,7 @@ def build_dataagent_toolchain(
 
     def python_analyze(params: dict) -> ToolResult:
         code = params.get("code", "")
-        data = params.get("data")
+        data = params.get("data")  # 后续行使用
         # 演示性 Python 分析：这里执行受限的统计逻辑，不 eval 任意代码
         metric = params.get("metric", "gmv")
         if data and metric in data:

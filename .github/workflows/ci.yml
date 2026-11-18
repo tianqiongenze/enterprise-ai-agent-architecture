@@ -19,7 +19,26 @@ jobs:
       - name: 安装依赖
         working-directory: dataagent
         run: |
-          pip install -r requirements.txt pytest
+          pip install -r requirements.txt pytest ruff mypy coverage
+
+      - name: Ruff 代码检查（零容忍）
+        working-directory: dataagent
+        run: |
+          python -m ruff check src
+
+      - name: mypy 类型检查（零错误）
+        working-directory: dataagent
+        run: |
+          python -m mypy src --config-file pyproject.toml
+
+      - name: 覆盖率 ≥90%（GAP-02 口径）
+        working-directory: dataagent
+        run: |
+          PYTHONPATH=src python -m coverage run --source=src/dataagent -m pytest -o addopts="" -q
+          python -m coverage report
+          PYTHONPATH=src python -c "
+          from coverage import Coverage; c=Coverage(); c.load(); d=c.get_data()
+          pct=c.report(); assert pct >= 90, f'coverage {pct:.1f}% < 90%'; print(f'coverage {pct:.1f}% OK')"
 
       - name: 运行测试套件（含故障注入 / Eval / Regression Gate）
         working-directory: dataagent

@@ -486,6 +486,8 @@ _SWEEPER_TASK: Optional[Any] = None
 
 
 async def _approval_sweeper_loop(interval_s: float) -> None:
+    from dataagent.infra.observability.notify import sink_from_env
+    sink = sink_from_env("[approval-sweeper]")  # R10: 审批升级/过期 → 真实 IM（env 配置）
     while True:
         await asyncio.sleep(interval_s)
         try:
@@ -493,6 +495,10 @@ async def _approval_sweeper_loop(interval_s: float) -> None:
             if getattr(port, "timeout_policy", None) is None:
                 continue  # 策略未启用：诚实空转
             acts = port.sweep_timeouts(run_id=None)
+            for r, st in acts:
+                sink.notify("approval_timeout",
+                            {"request_id": r.request_id, "action": getattr(r, "action", ""),
+                             "status": st, "run_id": getattr(r, "run_id", "")})
             if acts:
                 print("[approval-sweeper] " + "; ".join(
                     f"{r.request_id}={st}" for r, st in acts), flush=True)

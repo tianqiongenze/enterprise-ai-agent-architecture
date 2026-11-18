@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """适配器：LiteLLM / OpenAI 兼容 LLM Client（对接服务器 K8S ai-platform 的 LiteLLM 网关）。
 
 集群 LLM 平台（已实测确认）：
@@ -17,7 +16,8 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from ...contracts.model import (
     CompletionResult,
@@ -56,7 +56,7 @@ class _HttpClient:
         try:
             with self._ur.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise RuntimeError(f"LLM gateway HTTP error: {e}") from e
 
 
@@ -101,9 +101,9 @@ class LiteLLMGatewayClient(LlmClient):
         messages: Sequence[Message],
         *,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-        structured: Optional[type] = None,
-        tools: Optional[Sequence[dict[str, Any]]] = None,
+        max_tokens: int | None = None,
+        structured: type | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> CompletionResult:
         from ...infra.gateway.llm_runtime import LlmError
 
@@ -135,13 +135,13 @@ class LiteLLMGatewayClient(LlmClient):
         text = ""
         try:
             text = data["choices"][0]["message"].get("content", "")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         if structured is not None:
             try:
                 obj = json.loads(text or "{}")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 raise LlmError(f"invalid JSON from gateway for structured output: {e}", retryable=False) from e
             return CompletionResult(text=text, structured=obj, usage=usage, model=model, tool_calls=())
         return CompletionResult(text=text, tool_calls=tool_calls, usage=usage, model=model)
@@ -153,7 +153,7 @@ class LiteLLMGatewayClient(LlmClient):
                 prompt_tokens=int(u.get("prompt_tokens", 0)),
                 completion_tokens=int(u.get("completion_tokens", 0)),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             return Usage(0, 0, 0)
 
     def _toolcalls_from(self, data: dict) -> list[ToolCall]:
@@ -164,10 +164,10 @@ class LiteLLMGatewayClient(LlmClient):
                 args = fn.get("arguments", "{}")
                 try:
                     argd = json.loads(args) if isinstance(args, str) else (args or {})
-                except Exception:  # noqa: BLE001
+                except Exception:
                     argd = {}
                 out.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), arguments=argd))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return out
 

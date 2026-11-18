@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """LLM Runtime —— 可靠模型执行底座 (第四篇)。
 
 模块分层：
@@ -17,19 +16,16 @@ from __future__ import annotations
 import inspect
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any
 
 from ...contracts.model import (
     CallStatus,
     CompletionResult,
     LlmClient,
     LogicalCall,
-    Message,
     ModelCapability,
-    Role,
-    ToolCall,
-    Usage,
 )
 from ...contracts.runtime import Event, EventType
 
@@ -43,7 +39,7 @@ class LlmError(Exception):
     """
 
     def __init__(self, message: str, retryable: bool = True, attempt: int = 0,
-                 retry_after_s: Optional[float] = None):
+                 retry_after_s: float | None = None):
         super().__init__(message)
         self.retryable = retryable
         self.attempt = attempt
@@ -133,7 +129,7 @@ class Router:
         return self._route_capabilities.get(task, ())
 
     def decide(
-        self, task: str, *, require_capabilities: Optional[tuple[str, ...]] = None
+        self, task: str, *, require_capabilities: tuple[str, ...] | None = None
     ) -> RoutingDecision:
         caps = tuple(require_capabilities) if require_capabilities is not None else self._route_capabilities.get(task, ())
         candidates = self._routes.get(task) or ["default"]
@@ -171,7 +167,7 @@ class ReliableExecutor:
         timeout_s: float = 60.0,
         base_backoff_s: float = 0.2,
         sleep: Any = time.sleep,
-        monotonic: Optional[Callable[[], float]] = None,
+        monotonic: Callable[[], float] | None = None,
     ):
         self._client = client
         self._router = router
@@ -203,9 +199,9 @@ class ReliableExecutor:
         call: LogicalCall,
         *,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-        structured: Optional[type] = None,
-        deadline: Optional[float] = None,
+        max_tokens: int | None = None,
+        structured: type | None = None,
+        deadline: float | None = None,
     ) -> CompletionResult:
         """执行整个 LogicalCall：内部重试 + fallback + 结构化校验 + deadline 拦截。
 
@@ -221,7 +217,7 @@ class ReliableExecutor:
         decision = self._router.decide(call.task)
         attempt_models = [decision.chosen] + decision.fallbacks
 
-        last_error: Optional[LlmError] = None
+        last_error: LlmError | None = None
         last_model = decision.chosen
         for attempt_idx in range(self.max_attempts):
             # deadline 拦截：在发起任何新尝试之前检查（"截止时间已过 → 零次尝试"可被确定性断言）
@@ -275,7 +271,7 @@ class ReliableExecutor:
                     wait = (min(e.retry_after_s, 1.0) if e.retry_after_s is not None
                             else min(self.base_backoff_s * (2 ** attempt_idx), 1.0))
                     self._sleep(wait)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     last_error = LlmError(str(e), retryable=True)
                     self.stats.failures += 1
                     self.stats.retries += 1
@@ -310,5 +306,5 @@ class ReliableExecutor:
                 model_type.model_validate(data)
             else:
                 inspect.signature(model_type).bind(**data)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise LlmError(f"结构化输出校验失败 [{model}]: {e}", retryable=True) from e

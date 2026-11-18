@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """DataAgent CLI —— 用于演示与验收 (第十篇最终展示)。
 
 离线可运行：python -m dataagent 或 dataagent-demo。

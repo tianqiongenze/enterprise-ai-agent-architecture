@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """应用层装配 (Application / Composition Root)。
 
 把契约层、领域层、基础设施、适配器组装成可运行的 DataAgent 管线。
@@ -9,15 +8,14 @@
 """
 from __future__ import annotations
 
-from typing import Any, Optional
 import os
+from typing import Any
 
 from ..adapters.llm.fake_client import FakeLlmClient
 from ..contracts.model import ModelCapability
 from ..contracts.runtime import ApprovalTimeoutPolicy
 from ..infra.context.assembler import (
     ContextAssembler,
-    ContextContract,
     ContextItem,
     ContextProvider,
     Provenance,
@@ -32,10 +30,8 @@ from ..infra.memory.memory import (
     MemoryWritePipeline,
     default_memory_validate,
 )
-from ..infra.metrics.eval_ops import BatchEvalRunner, RegressionGate
 from ..infra.observability import JsonlRecorder, LogNotificationSink
 from ..infra.runtime.harness import AutonomyBudget, Harness, StopCondition, Verifier
-from ..infra.runtime.lease import LeaseRegistry
 from ..infra.runtime.workflow import (
     DurableWorkflowExecutor,
     HumanApprovalGate,
@@ -44,14 +40,19 @@ from ..infra.runtime.workflow import (
     InMemoryRunStore,
 )
 from ..infra.sandbox.executor import NetworkPolicy, PythonSandbox
-from ..infra.security.guards import CredentialBroker, InjectionGuard, QueryGateway, SQLPolicy, TenancyContext
+from ..infra.security.guards import (
+    CredentialBroker,
+    InjectionGuard,
+    QueryGateway,
+    SQLPolicy,
+)
 from ..infra.skills.skill import SkillRegistry, build_anomaly_skill
 
 
 class DataAgentContainer:
     """DataAgent 的运行时组合根。"""
 
-    def __init__(self, seed_orders: Optional[dict[str, list[dict]]] = None) -> None:
+    def __init__(self, seed_orders: dict[str, list[dict]] | None = None) -> None:
         # ---- LLM Runtime (第四篇) ----
         self.registry = ModelRegistry()
         self.registry.register(ModelCapability(model="luna", provider="mock"))
@@ -170,7 +171,6 @@ class DataAgentContainer:
         return self.workflow_analysis(run)
 
     def workflow_analysis(self, run: Any) -> Any:
-        from ..contracts.runtime import Run
         from ..infra.runtime.workflow import WorkflowDefinition, WorkflowNode
 
         wf = WorkflowDefinition("analysis", nodes=[

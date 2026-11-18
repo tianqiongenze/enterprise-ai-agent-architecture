@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """模型调用契约 (LLM Runtime 契约)。
 
 Alignment: 第四篇《LLM 执行底座篇》
@@ -10,10 +9,10 @@ from __future__ import annotations
 
 import time
 import uuid
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, replace
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, ClassVar, Iterable, Optional, Protocol, Sequence
+from typing import Any, ClassVar, Protocol
 
 
 class Role(str, Enum):
@@ -27,9 +26,9 @@ class Role(str, Enum):
 class Message:
     role: Role
     content: str = ""
-    name: Optional[str] = None
-    tool_call_id: Optional[str] = None
-    tool_calls: Optional[Sequence["ToolCall"]] = None
+    name: str | None = None
+    tool_call_id: str | None = None
+    tool_calls: Sequence[ToolCall] | None = None
 
 
 @dataclass(frozen=True)
@@ -95,11 +94,11 @@ class LogicalCall:
     capability: ModelCapability
     messages: list[Message]
     created_at: float = field(default_factory=time.time)
-    attempts: list["Attempt"] = field(default_factory=list)
+    attempts: list[Attempt] = field(default_factory=list)
     status: CallStatus = CallStatus.PENDING
-    output: Optional[str] = None
-    structured: Optional[dict[str, Any]] = None
-    usage: "Usage" | None = None
+    output: str | None = None
+    structured: dict[str, Any] | None = None
+    usage: Usage | None = None
     max_attempts: int = 3
     deadline: float = 0.0
 
@@ -110,7 +109,7 @@ class LogicalCall:
         messages: list[Message],
         max_attempts: int = 3,
         deadline: float = 0.0,
-    ) -> "LogicalCall":
+    ) -> LogicalCall:
         return LogicalCall(
             call_id=f"call_{uuid.uuid4().hex[:12]}",
             task=task,
@@ -128,11 +127,11 @@ class Attempt:
     attempt_index: int
     status: CallStatus
     started_at: float
-    finished_at: Optional[float] = None
-    error: Optional[str] = None
-    output: Optional[str] = None
-    structured: Optional[dict[str, Any]] = None
-    usage: "Usage" | None = None
+    finished_at: float | None = None
+    error: str | None = None
+    output: str | None = None
+    structured: dict[str, Any] | None = None
+    usage: Usage | None = None
 
 
 @dataclass(frozen=True)
@@ -155,20 +154,20 @@ class CompletionFn(Protocol):
         messages: Sequence[Message],
         *,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-        structured: Optional[type] = None,
-        tools: Optional[Sequence[dict[str, Any]]] = None,
-    ) -> "CompletionResult": ...
+        max_tokens: int | None = None,
+        structured: type | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+    ) -> CompletionResult: ...
 
 
 @dataclass(frozen=True)
 class CompletionResult:
     text: str
     tool_calls: Sequence[ToolCall] = ()
-    usage: Optional[Usage] = None
+    usage: Usage | None = None
     model: str = "mock"
-    reasoning: Optional[str] = None
-    structured: Optional[dict[str, Any]] = None
+    reasoning: str | None = None
+    structured: dict[str, Any] | None = None
 
 
 class LlmClient(Protocol):
@@ -180,9 +179,9 @@ class LlmClient(Protocol):
         messages: Sequence[Message],
         *,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-        structured: Optional[type] = None,
-        tools: Optional[Sequence[dict[str, Any]]] = None,
+        max_tokens: int | None = None,
+        structured: type | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> CompletionResult: ...
 
     def stream(

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """统一执行模型 (Unified Runtime Domain)。
 
 Alignment: 第五篇《Agent Harness 与 Agent Runtime 工程架构篇》
@@ -21,7 +20,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Generic, Optional, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar
 
 T = TypeVar("T")
 
@@ -169,7 +168,7 @@ class Step:
     input: dict[str, Any] = field(default_factory=dict)
     output: dict[str, Any] = field(default_factory=dict)
     attempts: int = 0
-    error: Optional[str] = None
+    error: str | None = None
     events: list[Event] = field(default_factory=list)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -202,7 +201,7 @@ class Run:
     status: RunStatus = RunStatus.PENDING
     steps: list[Step] = field(default_factory=list)
     events: list[Event] = field(default_factory=list)
-    checkpoint: Optional["Checkpoint"] = None
+    checkpoint: Checkpoint | None = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     budget_used_input: int = 0
@@ -223,7 +222,7 @@ class Run:
         self,
         type_: EventType,
         step_id: str = "",
-        data: Optional[dict[str, Any]] = None,
+        data: dict[str, Any] | None = None,
         **extra: Any,
     ) -> Event:
         """追加事件。
@@ -246,7 +245,7 @@ class Run:
         self.steps.append(step)
         return step
 
-    def to_checkpoint(self) -> "Checkpoint":
+    def to_checkpoint(self) -> Checkpoint:
         """将可恢复的最小状态固化为 Checkpoint。"""
         return Checkpoint(
             run_id=self.run_id,
@@ -258,7 +257,7 @@ class Run:
             budget=(self.budget_used_input, self.budget_used_output),
         )
 
-    def restore(self, cp: "Checkpoint") -> None:
+    def restore(self, cp: Checkpoint) -> None:
         """从 Checkpoint 物化恢复 —— 属于重建而非状态迁移，绕过迁移校验。"""
         object.__setattr__(self, "status", cp.status)
         self.events = [
@@ -284,7 +283,7 @@ class RunStore(Protocol):
     def save(self, run: Run) -> None: ...
     def load(self, run_id: str) -> Run: ...
     def save_checkpoint(self, cp: Checkpoint) -> None: ...
-    def load_checkpoint(self, run_id: str) -> Optional[Checkpoint]: ...
+    def load_checkpoint(self, run_id: str) -> Checkpoint | None: ...
 
 
 class NotificationSink(Protocol):
@@ -337,7 +336,7 @@ class ApprovalTimeoutPolicy:
         self.escalate_after_s = escalate_after_s
         self.escalation_chain = escalation_chain
 
-    def timeout_state(self, req: "ApprovalRequest", *, now: float) -> str:
+    def timeout_state(self, req: ApprovalRequest, *, now: float) -> str:
         """返回 'expired' | 'escalate:<角色>' | 'waiting'（三态判定，供外层执行副作用）。"""
         if req.status != ApprovalStatus.PENDING.value:
             return "waiting"
@@ -350,7 +349,7 @@ class ApprovalTimeoutPolicy:
                 return f"escalate:{nxt}"
         return "waiting"
 
-    def _next_escalation(self, req: "ApprovalRequest") -> str:
+    def _next_escalation(self, req: ApprovalRequest) -> str:
         tried = set(req.escalation_history)
         for r in self.escalation_chain:
             if r not in tried:
@@ -381,6 +380,8 @@ class ApprovalPort(Protocol):
     def resolve(self, request_id: str, decision: ApprovalDecision, by: str) -> None: ...
     def get(self, request_id: str) -> ApprovalRequest: ...
 
+    # sweep_timeouts/timeout_policy 为鸭子类型扩展（sweeper 端 getattr 探测），不进 Protocol
+
 
 class TaskData(Generic[T]):
     """调度队列中的任务载荷。"""
@@ -396,7 +397,7 @@ class Worker(Protocol):
 
 class TaskQueue(Protocol):
     def enqueue(self, run_id: str, queue: str, payload: Any) -> None: ...
-    def claim(self, queue: str) -> Optional[TaskData]: ...
+    def claim(self, queue: str) -> TaskData | None: ...
     def ack(self, run_id: str) -> None: ...
     def nack(self, run_id: str, requeue: bool = True) -> None: ...
 
@@ -413,7 +414,7 @@ class Action:
     idempotency_key: str = ""
     status: str = "proposed"  # proposed -> approved -> executed / compensated
     executed: bool = False
-    result: Optional[dict[str, Any]] = None
+    result: dict[str, Any] | None = None
     approval_required: bool = False
 
 class ApprovalPendingError(Exception):

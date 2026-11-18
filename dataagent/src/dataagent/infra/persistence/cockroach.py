@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """真实持久化实现：CockroachDB (PostgreSQL 兼容) + Redis —— 取代内存实现。
 
 Port 对齐：
@@ -11,25 +10,32 @@ Port 对齐：
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import re
 import time
-from typing import Any, Optional
+from typing import Any
 
 # 可选依赖：未安装则模块导入时置 None 以便降级
 try:
     import asyncpg
-except Exception:  # noqa: BLE001
+except Exception:
     asyncpg = None  # type: ignore
 
 try:
     import redis as _redis
-except Exception:  # noqa: BLE001
+except Exception:
     _redis = None  # type: ignore
 
-from ...contracts.runtime import Checkpoint, Event, EventType, Run, RunStatus, RunStore, Step, StepStatus
+from ...contracts.runtime import (
+    Checkpoint,
+    Event,
+    EventType,
+    Run,
+    RunStatus,
+    RunStore,
+    Step,
+    StepStatus,
+)
 from ...infra.memory.memory import Memory, MemoryScope, MemoryStore
 
 
@@ -95,7 +101,7 @@ class CockroachRunStore(RunStore):
         # Checkpoint 直接编码进 Run payload；此处提供独立覆盖（存同一行即可）
         pass
 
-    async def load_checkpoint(self, run_id: str) -> Optional[Checkpoint]:
+    async def load_checkpoint(self, run_id: str) -> Checkpoint | None:
         try:
             run = await self.load(run_id)
         except KeyError:
@@ -158,7 +164,7 @@ class CockroachMemoryStore(MemoryStore):
                                      memory_id, tenant_id)
         return "UPDATE 1" in cur
 
-    async def get(self, memory_id: str) -> Optional[Memory]:
+    async def get(self, memory_id: str) -> Memory | None:
         pool = await self._ensure()
         async with pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM agent_memory WHERE memory_id=$1 AND active", memory_id)
@@ -202,7 +208,7 @@ def run_from_dict(d: dict) -> Run:
     return run
 
 
-def row_to_memory(r) -> Optional[Memory]:
+def row_to_memory(r) -> Memory | None:
     if not r:
         return None
     return Memory(
@@ -248,7 +254,7 @@ def _conn_kwargs(host: str, port: int, user: str, database: str, password: str,
 
 def _dsn_kwargs(dsn: str, timeout_s: int) -> dict:
     """从 postgresql://user@host:port/db?sslmode=... 解析；附加 server_settings。"""
-    from urllib.parse import urlparse, unquote
+    from urllib.parse import unquote, urlparse
     u = urlparse(dsn)
     kw = dict(user=unquote(u.username or "root"), timeout=timeout_s,
               server_settings={"application_name": APP_NAME,
@@ -286,7 +292,7 @@ async def _redis_fallback():
         return _mem_fallback(), True
     if cli is not None:
         return cli, True
-    from urllib.parse import urlparse, unquote
+    from urllib.parse import unquote, urlparse
     u = urlparse(url)
     host = u.hostname or "127.0.0.1"
     port = u.port or 6379
@@ -298,11 +304,11 @@ async def _redis_fallback():
         clustered = False
         try:
             clustered = bool((await probe.info("cluster")).get("cluster_enabled"))
-        except Exception:  # noqa: BLE001  MOVED 等集群响应 → 按集群处理
+        except Exception:
             clustered = True
         try:
             await probe.aclose()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         if clustered:
             from redis.asyncio.cluster import RedisCluster
@@ -313,7 +319,7 @@ async def _redis_fallback():
             cli = probe
         _REDIS_CLI_BY_LOOP[loop_id] = cli
         return cli, True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return _mem_fallback(), True
 
 
@@ -387,18 +393,18 @@ async def mirror_run_to_redis(run_id: str, payload: dict) -> bool:
         await cli.set(f"dataagent:run:{run_id}", json.dumps(payload, ensure_ascii=False),
                       ex=RUN_MIRROR_TTL)
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
-async def read_run_mirror(run_id: str) -> Optional[dict]:
+async def read_run_mirror(run_id: str) -> dict | None:
     cli, ok = await _redis_fallback()
     if not ok:
         return None
     try:
         raw = await cli.get(f"dataagent:run:{run_id}")
         return json.loads(raw) if raw else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -427,7 +433,7 @@ async def refresh_region_summary(dsn: str) -> int:
     conn = await _connect_kwargs_from_dsn(dsn, timeout_s=900)  # 15 分钟语句超时
     try:
         await conn.execute(f"DELETE FROM {SUMMARY_TABLE}")
-        n = await conn.fetchval(f"""
+        await conn.execute(f"""
         INSERT INTO {SUMMARY_TABLE}(tenant_id, region, orders, gmv, refreshed_at)
         SELECT tenant_id, region, count(*)::INT, round(sum(amount)::numeric,2)::FLOAT, now()
         FROM orders GROUP BY tenant_id, region
@@ -438,7 +444,7 @@ async def refresh_region_summary(dsn: str) -> int:
         await conn.close()
 
 
-async def read_region_summary(dsn: str, tenant_id: str, limit: int) -> Optional[list]:
+async def read_region_summary(dsn: str, tenant_id: str, limit: int) -> list | None:
     """毫秒级读汇总表；闸门饱和抛异常由上层回退 Redis。"""
     conn = await _connect_kwargs_from_dsn(dsn, timeout_s=6)
     try:
@@ -458,18 +464,18 @@ async def mirror_summary_to_redis(rows: list) -> bool:
         await cli.set("dataagent:region_summary", json.dumps(rows, ensure_ascii=False),
                       ex=24 * 3600)
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
-async def read_summary_mirror() -> Optional[list]:
+async def read_summary_mirror() -> list | None:
     cli, ok = await _redis_fallback()
     if not ok:
         return None
     try:
         raw = await cli.get("dataagent:region_summary")
         return json.loads(raw) if raw else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -531,7 +537,7 @@ async def upsert_task(dsn: str, task: dict) -> None:
         await conn.close()
 
 
-async def get_task(dsn: str, task_id: str) -> Optional[dict]:
+async def get_task(dsn: str, task_id: str) -> dict | None:
     conn = await _connect_kwargs_from_dsn(dsn, timeout_s=6)
     try:
         r = await conn.fetchrow(f"SELECT * FROM {TASKS_TABLE} WHERE task_id=$1", task_id)
@@ -550,7 +556,7 @@ async def mirror_task_to_redis(task: dict) -> bool:
                       json.dumps(task, ensure_ascii=False, default=str), ex=RUN_MIRROR_TTL)
         await cli.sadd("dataagent:tasks:all", tid)
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -569,18 +575,18 @@ async def list_tasks_mirror(limit: int = 50) -> list:
                 out.append(json.loads(raw))
         out.sort(key=lambda t: str(t.get("updated_at", "")), reverse=True)
         return out[:limit]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
 
-async def read_task_mirror(task_id: str) -> Optional[dict]:
+async def read_task_mirror(task_id: str) -> dict | None:
     cli, ok = await _redis_fallback()
     if not ok:
         return None
     try:
         raw = await cli.get(f"dataagent:task:{task_id}")
         return json.loads(raw) if raw else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -595,7 +601,7 @@ async def mirror_approval_to_redis(appr: dict) -> bool:
         if appr.get("status") != "pending":
             await cli.srem("dataagent:approvals:pending", appr.get("approval_id"))
         return True
-    except Exception:  # noqa: BLE001  序列化失败也不得静默吞掉——镜像失真即双重决议
+    except Exception:
         raise
 
 
@@ -617,13 +623,13 @@ async def create_approval(dsn: str, rec: dict) -> dict:
                 rec.get("risk_level", "high"), rec.get("status"), rec.get("requested_by", "agent"))
         finally:
             await conn.close()
-    except Exception:  # noqa: BLE001  闸门饱和 → 仅镜像（审批不丢）
+    except Exception:
         pass
     await mirror_approval_to_redis(rec)
     return rec
 
 
-async def resolve_approval(dsn: str, approval_id: str, decision: str, by: str) -> Optional[dict]:
+async def resolve_approval(dsn: str, approval_id: str, decision: str, by: str) -> dict | None:
     import time as _t
     rec = None
     try:
@@ -636,7 +642,7 @@ async def resolve_approval(dsn: str, approval_id: str, decision: str, by: str) -
             rec = dict(r) if r else None
         finally:
             await conn.close()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     if rec is None:
         rec = await _read_approval_mirror(approval_id)
@@ -661,7 +667,7 @@ async def resolve_approval(dsn: str, approval_id: str, decision: str, by: str) -
                     rec.get("requested_by", "agent"), by, _t.time(), rec.get("created_at", _t.time()))
             finally:
                 await conn.close()
-        except Exception:  # noqa: BLE001  闸门仍饱和：镜像为准，CRDB 追平留重放
+        except Exception:
             pass
     if isinstance(rec.get("params"), str):
         rec["params"] = json.loads(rec.get("params") or "{}")
@@ -669,18 +675,18 @@ async def resolve_approval(dsn: str, approval_id: str, decision: str, by: str) -
     return rec
 
 
-async def _read_approval_mirror(approval_id: str) -> Optional[dict]:
+async def _read_approval_mirror(approval_id: str) -> dict | None:
     cli, ok = await _redis_fallback()
     if not ok:
         return None
     try:
         raw = await cli.get(f"dataagent:approval:{approval_id}")
         return json.loads(raw) if raw else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
-async def get_approval(dsn: str, approval_id: str) -> Optional[dict]:
+async def get_approval(dsn: str, approval_id: str) -> dict | None:
     try:
         conn = await _connect_kwargs_from_dsn(dsn, timeout_s=6)
         try:
@@ -691,7 +697,7 @@ async def get_approval(dsn: str, approval_id: str) -> Optional[dict]:
                 return rec
         finally:
             await conn.close()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return await _read_approval_mirror(approval_id)
 
@@ -711,5 +717,5 @@ async def list_approvals(dsn: str, status: str = "pending", limit: int = 20) -> 
             return out
         finally:
             await conn.close()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []

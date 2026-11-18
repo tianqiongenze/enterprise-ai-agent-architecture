@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """可观测性基座：Run 事件流与上下文决策追踪的 JSO\n 持久化（GAP-18）。
 
 生产口径：审计与排障需要"进程重启后仍查得到"的事件/决策记录。M0 用本地 JSO\n
@@ -17,7 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 DEFAULT_EVENTS_FILE = "dataagent_events.jsonl"
 DEFAULT_DECISIONS_FILE = "dataagent_decisions.jsonl"
@@ -26,7 +25,7 @@ DEFAULT_DECISIONS_FILE = "dataagent_decisions.jsonl"
 class JsonlRecorder:
     """本地 JSO\n 记录器：events + decisions 两条流 + 检查点快照。"""
 
-    def __init__(self, dirpath: "str | Path",
+    def __init__(self, dirpath: str | Path,
                  events_file: str = DEFAULT_EVENTS_FILE,
                  decisions_file: str = DEFAULT_DECISIONS_FILE):
         self.dir = Path(dirpath)
@@ -65,7 +64,7 @@ class JsonlRecorder:
         return n
 
     def record_decision(self, tenant_id: str, trace: dict[str, Any],
-                        *, contract: Optional[str] = None) -> None:
+                        *, contract: str | None = None) -> None:
         """记录一次上下文装配决策（ContextSlice.decision_trace 的落盘形态）。"""
         try:
             payload = {"tenant_id": tenant_id, "contract": contract}
@@ -77,7 +76,7 @@ class JsonlRecorder:
         except OSError:
             self.stats["write_errors"] += 1
 
-    def record_slice(self, slice_, *, contract: Optional[str] = None) -> int:
+    def record_slice(self, slice_, *, contract: str | None = None) -> int:
         """ContextSlice 全量落盘：决策追踪 + 过滤原因（运营看板的数据源）。"""
         m = 0
         for tr in getattr(slice_, "decision_trace", []):
@@ -113,13 +112,13 @@ class JsonlRecorder:
 
     # ---------------- 读取（重放/审计消费侧） ----------------
 
-    def load_events(self, run_id: Optional[str] = None) -> list[dict]:
+    def load_events(self, run_id: str | None = None) -> list[dict]:
         return self._load(self.events_path, run_id)
 
-    def load_decisions(self, tenant_id: Optional[str] = None) -> list[dict]:
+    def load_decisions(self, tenant_id: str | None = None) -> list[dict]:
         return self._load(self.decisions_path, tenant_id, key="tenant_id")
 
-    def _load(self, path: Path, filter_val: Optional[str],
+    def _load(self, path: Path, filter_val: str | None,
               key: str = "run_id") -> list[dict]:
         if not path.exists():
             return []

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Autonomous Analysis Harness (第五篇第2课)。
 
 从 while 循环到"可验证的经营分析闭环"：
@@ -16,7 +15,7 @@ Plan -> Replan -> Execute(Tool) -> Observe -> Verify -> Stop Condition
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
 
 from ...contracts.model import LogicalCall, Message, Role
 from ...contracts.runtime import EventType, Run, RunStatus, StepStatus
@@ -71,7 +70,7 @@ class AutonomyBudget:
 class Verifier:
     """Verifier：验证中间结果是否可信 —— 防止越跑越偏。可注入规则校验。"""
 
-    def __init__(self, checks: Optional[list[Callable[[dict], str]]] = None):
+    def __init__(self, checks: list[Callable[[dict], str]] | None = None):
         self.checks = checks or []
 
     def run(self, context: dict) -> tuple[bool, str]:
@@ -106,11 +105,11 @@ class Harness:
         registry: CapabilityRegistry,
         model: str = "default",
         *,
-        budget: Optional[AutonomyBudget] = None,
-        verifier: Optional[Verifier] = None,
-        stop: Optional[StopCondition] = None,
-        plan_prompt_fn: Optional[Callable[[str, str], list[Message]]] = None,
-        clock: Optional[Clock] = None,
+        budget: AutonomyBudget | None = None,
+        verifier: Verifier | None = None,
+        stop: StopCondition | None = None,
+        plan_prompt_fn: Callable[[str, str], list[Message]] | None = None,
+        clock: Clock | None = None,
     ):
         self.executor = executor
         self.registry = registry
@@ -128,7 +127,7 @@ class Harness:
         Verifier 失败时抛 :class:`VerifierFailedError`，由工作流把 Run 落 FAILED。
         这样 harness 作为 workflow 子节点不会与外层执行器争夺终态。
         """
-        cap = self.executor.registry.resolve(self.model)
+        self.executor.registry.resolve(self.model)  # 预热解析（一致性行为）
         if run.status == RunStatus.PENDING:
             run.status = RunStatus.RUNNING
         run.add_event(EventType.RUN_STARTED, data={"tenant": tenant_id})

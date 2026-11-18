@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """统一契约层 (Contract Layer)。
 
 定义贯穿全系统的领域契约：LogicalCall/Attempt、Run/Step/Event、
@@ -10,6 +9,6 @@ ToolSchema 三层契约、ContextProvider、Memory、Action、Eval 等。
 - 保证 Invariant (不变量) 在契约层即可被静态检查。
 """
 
-from . import model, runtime, tool  # noqa: F401
+from . import model, runtime, tool
 
 __all__ = ["model", "runtime", "tool"]

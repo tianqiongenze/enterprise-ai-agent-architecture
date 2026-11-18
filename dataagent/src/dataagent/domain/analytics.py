@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """领域层：多租户零售经营分析与决策 DataAgent 的领域模型 (DDD 核心)。
 
 Aggregate: Metric, Tenant, Indicator, AnalysisPlan
@@ -7,9 +6,8 @@ Aggregate: Metric, Tenant, Indicator, AnalysisPlan
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Protocol
 
 
 class MetricLevel(str):
@@ -74,7 +72,7 @@ class InMemoryMetricRegistry:
                 return  # 完全相同的重复注册幂等放行
         versions.append(metric)
 
-    def get(self, name: str, version: Optional[str] = None) -> Optional[Metric]:
+    def get(self, name: str, version: str | None = None) -> Metric | None:
         versions = self._metrics.get(name)
         if not versions:
             return None
@@ -99,7 +97,7 @@ class InMemoryMetricRegistry:
 
 
 class MetricRegistry(Protocol):
-    def get(self, name: str) -> Optional[Metric]: ...
+    def get(self, name: str) -> Metric | None: ...
     def all(self) -> list[Metric]: ...
     def register(self, metric: Metric) -> None: ...
 
@@ -119,8 +117,8 @@ class Tenant:
     name: str = ""
     data_sources: tuple[str, ...] = ()
     roles: set[str] = field(default_factory=lambda: {"analyst"})
-    row_filter: Optional[dict[str, str]] = None
-    col_filter: Optional[tuple[str, ...]] = None
+    row_filter: dict[str, str] | None = None
+    col_filter: tuple[str, ...] | None = None
 
     def can(self, action: str) -> bool:
         """风险动作权限判断。"""
@@ -138,7 +136,7 @@ class AnomalySignature:
 
     caused_by: str = ""
     reason: str = ""
-    impact_pct: Optional[float] = None
+    impact_pct: float | None = None
     evidence_keys: list[str] = field(default_factory=list)
     suggested_actions: list[str] = field(default_factory=list)
 
@@ -199,7 +197,7 @@ class TenantTenantRepository(Protocol):
 class AnalysisPlan:
     """一个经营分析的领域计划：多步骤。"""
 
-    def __init__(self, goal: str, steps: list[str], metric: Optional[str] = None):
+    def __init__(self, goal: str, steps: list[str], metric: str | None = None):
         self.goal = goal
         self.steps = steps
         self.metric = metric

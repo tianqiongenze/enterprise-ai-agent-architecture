@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Memory 治理 (第八篇)：可信、可控、可审计的长期记忆。
 
 核心设计：
@@ -15,9 +14,10 @@ from __future__ import annotations
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Protocol
+from typing import Optional, Protocol
 
 
 class MemoryScope(str, Enum):
@@ -43,7 +43,7 @@ class Memory:
     tenant_id: str = "default"
     key: str = ""              # 语义键
     content: str = ""
-    ttl_s: Optional[float] = None
+    ttl_s: float | None = None
     version: int = 1
     active: bool = True
     source: str = ""           # 来源 trace/event id
@@ -66,7 +66,7 @@ class Memory:
 class MemoryStore(Protocol):
     def put(self, mem: Memory) -> None: ...
     def delete(self, memory_id: str, tenant_id: str) -> bool: ...
-    def get(self, memory_id: str) -> Optional[Memory]: ...
+    def get(self, memory_id: str) -> Memory | None: ...
     def search_candidates(
         self, query: str, tenant_id: str, owner: str, limit: int = 10
     ) -> list[Memory]: ...
@@ -89,7 +89,7 @@ class InMemoryMemoryStore(MemoryStore):
         self._mem[mem.memory_id] = mem
         self._by_owner.setdefault((mem.tenant_id, mem.owner), []).append(mem.memory_id)
 
-    def _find_by_key(self, tenant_id, owner, key) -> Optional[Memory]:
+    def _find_by_key(self, tenant_id, owner, key) -> Memory | None:
         for mid in self._by_owner.get((tenant_id, owner), []):
             m = self._mem[mid]
             if m.key == key and m.active:
@@ -103,7 +103,7 @@ class InMemoryMemoryStore(MemoryStore):
         m.active = False  # 软删除，删除传播由 MemoryOps 处理向量索引
         return True
 
-    def get(self, memory_id: str) -> Optional[Memory]:
+    def get(self, memory_id: str) -> Memory | None:
         m = self._mem.get(memory_id)
         return m if m and m.active else None
 
@@ -128,7 +128,9 @@ class InMemoryMemoryStore(MemoryStore):
 
 #: GAP-12：DENY 词表语料化（infra/security/corpus/memory_deny.json）。
 #: 语料是数据不是代码 —— 新增拒绝词改 JSON 不动校验器；文件缺失/损坏回退内置四词。
-_DenySource = type("_DenySource", (), {"path": None})
+class _DenySource:
+    """DENY 语料路径持有（生产挂配置中心/测试隔离）；None=默认。"""
+    path: Optional[str] = None
 _BUILTIN_DENY_HINTS = ("临时结论", "原始查询结果", "模型推测", "未经验证的")
 
 
@@ -138,19 +140,18 @@ def set_deny_corpus_path(path) -> None:
 
 
 def load_deny_hints() -> list[str]:
+    import json as _json
     from pathlib import Path
 
-    import json as _json
-
-    cand = _DenySource.path
+    cand: str | None = _DenySource.path
     if cand is None:
-        cand = (Path(__file__).resolve().parents[1]
-                / "security" / "corpus" / "memory_deny.json")
+        cand = str((Path(__file__).resolve().parents[1]
+                / "security" / "corpus" / "memory_deny.json"))
     try:
         data = _json.loads(Path(cand).read_text(encoding="utf-8"))
         hints = [h for h in data.get("hints", []) if isinstance(h, str) and h]
         return hints or list(_BUILTIN_DENY_HINTS)
-    except Exception:  # noqa: BLE001  缺文件/坏 JSON → 回退内置（防线不因语料故障消失）
+    except Exception:
         return list(_BUILTIN_DENY_HINTS)
 
 
@@ -171,7 +172,7 @@ def default_memory_validate(content: str) -> tuple[bool, str]:
 class MemoryPolicyEngine:
     """MemoryPolicy：什么能写、要不要确认、存多久、谁能用。"""
 
-    def __init__(self, validate: Optional[Callable[[str], tuple[bool, str]]] = default_memory_validate):
+    def __init__(self, validate: Callable[[str], tuple[bool, str]] = default_memory_validate):
         self.validate = validate
 
     def decide(self, content: str, *, proposed_scope: MemoryScope = MemoryScope.USER) -> tuple[OutputChannel, str]:
@@ -202,8 +203,8 @@ class MemoryWritePipeline:
         scope: MemoryScope = MemoryScope.USER,
         source: str = "",
         evidence_ref: str = "",
-        ttl_s: Optional[float] = None,
-    ) -> tuple[bool, str, Optional[Memory]]:
+        ttl_s: float | None = None,
+    ) -> tuple[bool, str, Memory | None]:
         channel, msg = self.policy.decide(content, proposed_scope=scope)
         if channel == OutputChannel.DENIED:
             return False, f"拒绝写入({msg})", None
@@ -269,12 +270,12 @@ class MemoryOps:
     #: 传播站语义顺序：主库 → 索引 → 缓存/下游（缺任何一站 = 遗忘权承诺是假的）
     DEFAULT_STATIONS: tuple[str, ...] = ("primary_store", "vector_index", "cache_downstream")
 
-    def __init__(self, store: MemoryStore, sinks: Optional[dict[str, Callable[[Memory], bool]]] = None):
+    def __init__(self, store: MemoryStore, sinks: dict[str, Callable[[Memory], bool]] | None = None):
         self.store = store
         # station 名 → 删除执行函数(memory) -> bool（False = 该站失败，将记录在传播日志）
         self.sinks: dict[str, Callable[[Memory], bool]] = sinks or {}
 
-    def explain(self, memory_id: str, tenant_id: str) -> Optional[dict]:
+    def explain(self, memory_id: str, tenant_id: str) -> dict | None:
         m = self.store.get(memory_id)
         if m is None or m.tenant_id != tenant_id:
             return None
@@ -312,7 +313,7 @@ class MemoryOps:
                     continue
                 try:
                     log[station] = "propagated" if sink(mem) else "failed"
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     log[station] = f"error: {e}"
         return {"memory_id": memory_id, "stations": log, "ok": primary_ok}
 

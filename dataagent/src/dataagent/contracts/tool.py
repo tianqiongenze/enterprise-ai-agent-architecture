@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具契约 (Tool Contract) 三层。
 
 Alignment: 第七篇《Agent 工具 / 技能治理篇》第2课「Tool Contract 与动态工具供给」
@@ -14,9 +13,10 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any
 
 
 class RiskLevel(str, Enum):
@@ -41,19 +41,19 @@ class ToolResult:
 
     status: ToolResultStatus
     value: Any = None
-    error: Optional[str] = None
+    error: str | None = None
     usage_tokens: int = 0
     duration_ms: float = 0.0
     audit: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
-    def ok(value: Any, **kw: Any) -> "ToolResult":
+    def ok(value: Any, **kw: Any) -> ToolResult:
         return ToolResult(status=ToolResultStatus.OK, value=value, **kw)
 
     @staticmethod
     def err(
         message: str, status: ToolResultStatus = ToolResultStatus.ERROR, **kw: Any
-    ) -> "ToolResult":
+    ) -> ToolResult:
         return ToolResult(status=status, error=message, **kw)
 
 
@@ -83,7 +83,7 @@ class Tool:
     idempotent: bool = False
     # GAP-09/10：契约层的副作用治理字段
     idempotency_params: tuple[str, ...] = ()  # 声明哪些参数构成幂等键（未声明不可入键）
-    verifier: Optional[Any] = None            # 验真钩子 (receipt, params) -> 失败原因或 ''
+    verifier: Any | None = None            # 验真钩子 (receipt, params) -> 失败原因或 ''
     owner: str = "platform"
     version: str = "1.0.0"
     # GAP-19b: 上线即有下线 —— 墓碑化（能力消失必须可审计）
@@ -176,7 +176,7 @@ class Tool:
                         duration_ms=result.duration_ms, audit=result.audit,
                     )
             return result
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return ToolResult.err(f"执行异常: {e}", ToolResultStatus.RETRYABLE)
 
 
@@ -220,7 +220,7 @@ class CapabilityRegistry:
     def active_tools(self) -> list[Tool]:
         return [t for t in self._tools.values() if not t.retired]
 
-    def get(self, name: str) -> Optional[Tool]:
+    def get(self, name: str) -> Tool | None:
         # 已下线能力对执行层不可达（取不到 → Runtime 报"工具不存在"，与从未注册同语义）
         t = self._tools.get(name)
         return None if t is None or t.retired else t

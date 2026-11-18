@@ -39,3 +39,34 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "@abstractmethod",
 ]
+[tool.ruff]
+line-length = 120
+src = ["src"]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+  "E501",   # 行长由 line-length 管，格式化工具职责
+  "S101",   # assert 在测试与生产守卫中均为合法用法
+  "B008",   # Litestar/DI 依赖注入惯例：函数调用作为默认参数
+  "UP045", "UP037", "UP009", "UP035", "RUF100", "I001", "UP034",
+  "RUF001", "RUF002", "RUF003",  # CJK 项目：中文歧义字符为天然形态（全注/全代码库误报）
+  "UP042",  # StrEnum 迁移留待统一重构
+  "E702",   # SQL 字符串内分号被误报（见 per-file-ignores 补充）
+  "SIM102", "SIM105", "SIM108", "SIM103",  # 结构重构项：行为等价改写，本轮不改动避免引入行为差异
+  "B007",   # 循环变量未用（占位迭代器）：不影响正确性
+  "RUF005", # 集合字面量拼接语法：同 SIM 类风格改写
+  "UP028",  # yield-in-for-loop：改为 yield from 需验证迭代器行为不变
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/dataagent/infra/persistence/cockroach.py" = ["E702", "F841"]
+"src/dataagent/adapters/llm/*" = ["B017", "E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_ignores = false
+exclude = ["tests/", "adapters/", "infra/persistence/cockroach.py"]

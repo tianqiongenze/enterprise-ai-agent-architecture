@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """适配器：Ollama 原生后端（真实本地/集群模型推理）。
 
 解决场景：当 LiteLLM 网关不可达时，用集群/本地 Ollama（qwen3:4b、tinyllama、deepseek-r1:7b 等）
@@ -16,15 +15,11 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Optional, Sequence
 
 from ...contracts.model import (
     CompletionResult,
     LlmClient,
-    Message,
-    ModelCapability,
     Role,
-    ToolCall,
     Usage,
 )
 
@@ -69,13 +64,13 @@ class OllamaClient(LlmClient):
         try:
             with self._ur.urlopen(req, timeout=self.timeout_s) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise LlmError(f"ollama chat error: {e}", retryable=True) from e
 
         text = (data.get("message") or {}).get("content", "")
         usage = Usage(
-            prompt_tokens=int((data.get("prompt_eval_count") or 0)),
-            completion_tokens=int((data.get("eval_count") or 0)),
+            prompt_tokens=int(data.get("prompt_eval_count") or 0),
+            completion_tokens=int(data.get("eval_count") or 0),
         )
         # Ollama 不支持原生 tools 参数格式；此处返回空（工具调用由上层决定）
         return CompletionResult(text=text, tool_calls=[], usage=usage, model=model)

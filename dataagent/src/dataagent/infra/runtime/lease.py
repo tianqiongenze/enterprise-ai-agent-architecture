@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """跨 Worker 租约接管（GAP-14：从"登记未实现"到"最小可用实现"）。
 
 问题：长任务被某个 Worker 领取后该 Worker 崩溃——没有租约机制，任务要么永久卡死
@@ -19,8 +18,8 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 DEFAULT_LEASE_S = 30.0
 
@@ -33,7 +32,7 @@ class Lease:
     lease_s: float
     generation: int = 1  # fencing token：每次接管 +1
     renewed_at: float = 0.0
-    released_at: Optional[float] = None
+    released_at: float | None = None
 
     def __post_init__(self):
         if self.renewed_at <= 0:
@@ -58,7 +57,7 @@ class LeaseRegistry:
     # ---- 领取 / 续约 ----
 
     def acquire(self, task_id: str, owner: str,
-                *, lease_s: Optional[float] = None) -> Lease:
+                *, lease_s: float | None = None) -> Lease:
         now = self._clock()
         cur = self._leases.get(task_id)
         if cur is not None and cur.released_at is None and not cur.expired(now):
@@ -121,7 +120,7 @@ class LeaseRegistry:
 
     # ---- 查询 ----
 
-    def current(self, task_id: str) -> Optional[Lease]:
+    def current(self, task_id: str) -> Lease | None:
         return self._leases.get(task_id)
 
     def generation_of(self, task_id: str) -> int:

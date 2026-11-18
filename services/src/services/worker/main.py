@@ -103,6 +103,16 @@ async def process(task: dict) -> str:
         task["approval_id"] = (appr or {}).get("approval_id")
         task["status"] = "waiting_approval"
         await save_task(task)
+        # R10: 审批挂起 → 真实 IM 通知（fail-safe：通知故障不阻断任务）
+        try:
+            from dataagent.infra.observability.notify import sink_from_env
+            sink = sink_from_env("[worker-notify]")
+            sink.notify("approval_requested", {
+                "approval_id": task.get("approval_id"), "task_id": task_id,
+                "action": e.action, "query": task.get("query", ""),
+                "tenant_id": task.get("tenant_id", ""), "requested_by": task.get("user_id", "u1")})
+        except Exception as e2:  # noqa: BLE001
+            print(f"[worker] notify error: {e2}", flush=True)
         return "waiting_approval"
 
 

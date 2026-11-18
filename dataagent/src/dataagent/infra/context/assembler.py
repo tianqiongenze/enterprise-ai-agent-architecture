@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Context Runtime —— 面向决策步骤的最小充分、可信可控上下文 (第六篇)。
 
 核心设计：
@@ -14,12 +13,11 @@ Context Contract 四种 Decision Context（DataAgent 实战）：
 from __future__ import annotations
 
 import dataclasses
-import re
 import time
-import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Protocol
+from typing import Any
 
 from ..security.guards import InjectionGuard
 
@@ -63,7 +61,7 @@ class ContextItem:
     provenance: Provenance = Provenance.BUSINESS_KNOWLEDGE
     trust: TrustLevel = TrustLevel.TRUSTED
     priority: int = 10          # 数值越高越重要，必需信息优先保障
-    ttl_s: Optional[float] = None  # 生命周期（当前 step 有效）
+    ttl_s: float | None = None  # 生命周期（当前 step 有效）
     tenant_id: str = "default"
     role_mask: tuple[str, ...] = ()
     references: tuple[str, ...] = ()
@@ -124,8 +122,8 @@ class ContextAssembler:
         self,
         *,
         token_budget: int = 6000,
-        budget_partitions: Optional[dict[str, int]] = None,
-        token_estimator: Optional[Callable[[str], int]] = None,
+        budget_partitions: dict[str, int] | None = None,
+        token_estimator: Callable[[str], int] | None = None,
     ):
         self.token_budget = token_budget
         # 分区：provenance 类别 -> token 上限
@@ -148,11 +146,13 @@ class ContextAssembler:
         self,
         *,
         tenant_id: str = "default",
-        roles: set[str] = {"analyst"},
-        hard_filter: Optional[Callable[[ContextItem], tuple[bool, str]]] = None,
-        step_contract: Optional["ContextContract"] = None,
+        roles: set[str] | None = None,
+        hard_filter: Callable[[ContextItem], tuple[bool, str]] | None = None,
+        step_contract: ContextContract | None = None,
     ) -> ContextSlice:
         """组装上下文并执行充分性检查。"""
+        if roles is None:
+            roles = {"analyst"}
         slice_ = ContextSlice()
         partition_used: dict[str, int] = {}
 
