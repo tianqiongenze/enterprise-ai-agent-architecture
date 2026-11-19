@@ -19,7 +19,7 @@
 | Pulsar 客户端直连消费 | ✅ 已实现（Worker 真实订阅 Topics + E2E 全通，pulsar-client 3.13.0 在镜像内） |
 | **进程/容器级沙箱隔离**（CPU/内存/文件系统/强制终止） | ❌ 未实现（大纲第 7 篇 Sandbox 的容器形态） |
 | System 层 Grader（成本/时延）与消融工具 | ✅ 已实现（system_grader + Ablation，10 例测试） |
-| 生产通知渠道 | ✅ 已实现（IMNotificationSink 企业微信/飞书/钉钉四 provider wire-format 精确测试 + 环境工厂 + sweeper/worker 双端接线 + hook_receiver 真机投递验证；真实群机器人 URL 一行 env 即通） |
+| 生产通知渠道 | ✅ 已实现（真机投递验证通过：hook_receiver 收到企业微信 wire-format 消息，Worker 日志确认 [200]；3 家 provider wire-format 精确测试 10 例；真实群机器人 URL 一行 env 即通） |
 | ruff / mypy 接入 CI | ✅ 已实现（ruff 312 修复后 0 项 / mypy 34 文件 0 错 / CI 三步硬门禁） |
 
 > 台账：`docs/12-对比审计与优化重构记录.md`（GAP-01~36，单一真相源）；
